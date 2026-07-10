@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mcp-chatgpt-bridge — Provider Config</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --border: #e2e5ea;
+    --text: #1a1d21;
+    --muted: #6b7280;
+    --accent: #4f46e5;
+    --accent-contrast: #ffffff;
+    --ok: #0a7d2c;
+    --ok-bg: #e6f6ea;
+    --off-bg: #f1f2f4;
+    --off-text: #6b7280;
+    --danger: #b00020;
+    --danger-bg: #fdecec;
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --surface: #171a21;
+      --border: #2a2e37;
+      --text: #e6e8eb;
+      --muted: #9aa1ac;
+      --accent: #818cf8;
+      --accent-contrast: #14162080;
+      --ok: #4ade80;
+      --ok-bg: #123321;
+      --off-bg: #23262e;
+      --off-text: #9aa1ac;
+      --danger: #f87171;
+      --danger-bg: #3a1a1c;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 2.5rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+  }
+  header.page-header { margin-bottom: 1.75rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; letter-spacing: -0.01em; }
+  .subtitle { color: var(--muted); font-size: 0.88rem; margin: 0; }
+  h2.section-title { font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 2.25rem 0 0.75rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 1.25rem 1.4rem; }
+
+  /* Provider switch: segmented pill control */
+  .segmented { display: inline-flex; background: var(--off-bg); border-radius: 10px; padding: 4px; gap: 2px; }
+  .segmented label { position: relative; cursor: pointer; }
+  .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+  .segmented span {
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.45rem 1rem;
+    border-radius: 8px; font-size: 0.88rem; font-weight: 500; color: var(--muted);
+    transition: background 0.15s, color 0.15s;
+  }
+  .segmented input:checked + span { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+  .segmented input:checked + span::before { content: "●"; color: var(--ok); font-size: 0.6rem; }
+
+  /* Stat cards */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1rem; box-shadow: var(--shadow); }
+  .stat-card .stat-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  .stat-card .stat-value { font-size: 1.35rem; font-weight: 600; margin-top: 0.2rem; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.75rem 0 0; }
+  th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; padding: 0 0.5rem 0.5rem; }
+  td { padding: 0.55rem 0.5rem; border-top: 1px solid var(--border); font-size: 0.88rem; vertical-align: middle; }
+  tr:first-child td { border-top: none; }
+
+  .badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+  .badge.on { background: var(--ok-bg); color: var(--ok); }
+  .badge.off { background: var(--off-bg); color: var(--off-text); }
+  .masked { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+
+  button {
+    cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    border-radius: 7px; padding: 0.35rem 0.7rem; font-size: 0.82rem; font-weight: 500; transition: background 0.15s;
+  }
+  button:hover { background: var(--off-bg); }
+  button.danger { color: var(--danger); border-color: var(--danger); }
+  button.danger:hover { background: var(--danger-bg); }
+  button.primary { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+  button.primary:hover { filter: brightness(1.08); }
+  .row-actions { display: flex; gap: 0.4rem; }
+
+  form.add-key { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+  form.add-key input {
+    flex: 1; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font-size: 0.85rem;
+  }
+  form.add-key input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .toast {
+    position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+    background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger);
+    padding: 0.6rem 1.1rem; border-radius: 8px; font-size: 0.85rem; box-shadow: var(--shadow);
+    max-width: 90vw; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .toast.visible { opacity: 1; }
+
+  .empty-state { color: var(--muted); font-size: 0.85rem; padding: 0.5rem 0; }
+
+  .settings-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.7rem; flex-wrap: wrap; }
+  .settings-row label { flex: 0 0 100%; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.15rem; }
+  .settings-row input {
+    flex: 1; min-width: 180px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font-size: 0.85rem;
+  }
+  .settings-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { color: var(--muted); font-size: 0.78rem; margin: 0.25rem 0 1rem; }
+</style>
+</head>
+<body>
+<header class="page-header">
+  <h1>mcp-chatgpt-bridge — Provider Config</h1>
+  <p class="subtitle">Localhost-only, no auth. Manage the active provider, API keys, and usage here.</p>
+</header>
+
+<h2 class="section-title">Active provider</h2>
+<div class="card" id="provider-switch"></div>
+
+<h2 class="section-title">Usage summary</h2>
+<div id="usage-summary"></div>
+
+<div id="providers-container"></div>
+
+<h2 class="section-title">App settings</h2>
+<div id="app-settings-container"></div>
+
+<div id="error-box" class="toast" role="alert"></div>
+
+<script>
+async function fetchState() {
+  const res = await fetch('/api/state');
+  return res.json();
+}
+
+async function fetchSettings() {
+  const res = await fetch('/api/settings');
+  return res.json();
+}
+
+function el(tag, props, children) {
+  const node = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) {
+    if (k === 'text') node.textContent = v; // never innerHTML — untrusted labels must render as literal text
+    else node.setAttribute(k, v);
+  }
+  if (children) for (const c of children) node.appendChild(c);
+  return node;
+}
+
+async function postJson(url, body, method) {
+  const res = await fetch(url, {
+    method: method || 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
+  return res.json();
+}
+
+const PROVIDER_DISPLAY = { openai: 'OpenAI', gemini: 'Gemini' };
+
+function renderProviderSwitch(state) {
+  const container = document.getElementById('provider-switch');
+  container.textContent = '';
+  const segmented = el('div', { class: 'segmented' }, []);
+  for (const p of ['openai', 'gemini']) {
+    const label = el('label', {}, []);
+    const radio = el('input', { type: 'radio', name: 'active-provider', value: p });
+    radio.checked = state.activeProvider === p;
+    radio.addEventListener('change', async () => {
+      try {
+        await postJson('/api/provider', { provider: p });
+        await refresh();
+      } catch (e) {
+        showError(e.message);
+      }
+    });
+    label.appendChild(radio);
+    label.appendChild(el('span', { text: PROVIDER_DISPLAY[p] }));
+    segmented.appendChild(label);
+  }
+  container.appendChild(segmented);
+}
+
+function renderUsageSummary(usage) {
+  const container = document.getElementById('usage-summary');
+  container.textContent = '';
+  const grid = el('div', { class: 'stats-grid' }, []);
+  grid.appendChild(el('div', { class: 'stat-card' }, [
+    el('div', { class: 'stat-label', text: 'Total requests' }),
+    el('div', { class: 'stat-value', text: String(usage.totalRequests) }),
+  ]));
+  grid.appendChild(el('div', { class: 'stat-card' }, [
+    el('div', { class: 'stat-label', text: 'Total tokens' }),
+    el('div', { class: 'stat-value', text: String(usage.totalTokens) }),
+  ]));
+  for (const [provider, stats] of Object.entries(usage.byProvider)) {
+    grid.appendChild(el('div', { class: 'stat-card' }, [
+      el('div', { class: 'stat-label', text: `${PROVIDER_DISPLAY[provider] || provider} requests` }),
+      el('div', { class: 'stat-value', text: `${stats.requests} · ${stats.tokens} tok` }),
+    ]));
+  }
+  container.appendChild(grid);
+}
+
+function renderKeyRow(key, usageByKey, providerName) {
+  const stats = usageByKey[key.id];
+  const showBaseURL = providerName === 'openai';
+  const tr = el('tr', {}, []);
+
+  const labelTd = el('td', { text: key.label });
+  const baseURLTd = showBaseURL ? el('td', { text: key.baseURL || '—' }) : null;
+  const modelTd = el('td', { text: key.model || '—' });
+  const actionsTd = el('td', {}, []);
+
+  tr.appendChild(labelTd);
+  tr.appendChild(el('td', { class: 'masked', text: key.masked }));
+  tr.appendChild(el('td', {}, [el('span', { class: `badge ${key.enabled ? 'on' : 'off'}`, text: key.enabled ? 'Enabled' : 'Disabled' })]));
+  if (baseURLTd) tr.appendChild(baseURLTd);
+  tr.appendChild(modelTd);
+  tr.appendChild(el('td', { text: stats ? `${stats.requests} req · ${stats.tokens} tok` : '—' }));
+  tr.appendChild(actionsTd);
+
+  function renderViewActions() {
+    actionsTd.textContent = '';
+    const actions = el('div', { class: 'row-actions' }, []);
+    const toggleBtn = el('button', { text: key.enabled ? 'Disable' : 'Enable' });
+    toggleBtn.addEventListener('click', async () => {
+      try {
+        await postJson(`/api/keys/${key.id}`, { enabled: !key.enabled }, 'PATCH');
+        await refresh();
+      } catch (e) {
+        showError(e.message);
+      }
+    });
+    const editBtn = el('button', { text: 'Edit' });
+    editBtn.addEventListener('click', renderEditMode);
+    const removeBtn = el('button', { class: 'danger', text: 'Remove' });
+    removeBtn.addEventListener('click', async () => {
+      try {
+        await postJson(`/api/keys/${key.id}`, {}, 'DELETE');
+        await refresh();
+      } catch (e) {
+        showError(e.message);
+      }
+    });
+    actions.appendChild(toggleBtn);
+    actions.appendChild(editBtn);
+    actions.appendChild(removeBtn);
+    actionsTd.appendChild(actions);
+  }
+
+  // Swaps Label/Base URL/Model cells to inline inputs — reuses the row's own cells rather
+  // than a separate form, so editing a key doesn't shift the table layout.
+  function renderEditMode() {
+    const labelInput = el('input', { type: 'text', value: key.label });
+    labelTd.textContent = '';
+    labelTd.appendChild(labelInput);
+
+    let baseURLInput;
+    if (baseURLTd) {
+      baseURLInput = el('input', { type: 'text', placeholder: 'https://api.openai.com/v1 (default)', value: key.baseURL || '' });
+      baseURLTd.textContent = '';
+      baseURLTd.appendChild(baseURLInput);
+    }
+
+    const modelInput = el('input', { type: 'text', placeholder: 'default', value: key.model || '' });
+    modelTd.textContent = '';
+    modelTd.appendChild(modelInput);
+
+    actionsTd.textContent = '';
+    const actions = el('div', { class: 'row-actions' }, []);
+    const saveBtn = el('button', { class: 'primary', text: 'Save' });
+    saveBtn.addEventListener('click', async () => {
+      try {
+        await postJson(`/api/keys/${key.id}`, {
+          label: labelInput.value,
+          baseURL: baseURLInput ? baseURLInput.value : undefined,
+          model: modelInput.value,
+        }, 'PATCH');
+        await refresh();
+      } catch (e) {
+        showError(e.message);
+      }
+    });
+    const cancelBtn = el('button', { text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => refresh());
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    actionsTd.appendChild(actions);
+  }
+
+  renderViewActions();
+  return tr;
+}
+
+function renderAddKeyForm(providerName, defaultModel) {
+  const showBaseURL = providerName === 'openai';
+  const form = el('form', { class: 'add-key' }, []);
+  const labelInput = el('input', { type: 'text', placeholder: 'Label', required: 'required' });
+  const valueInput = el('input', { type: 'password', placeholder: 'API key value', required: 'required' });
+  const baseURLInput = showBaseURL
+    ? el('input', { type: 'text', placeholder: 'Base URL (optional, default: api.openai.com)' })
+    : null;
+  const modelInput = el('input', { type: 'text', placeholder: `Model (optional, default: ${defaultModel})` });
+  const submit = el('button', { type: 'submit', class: 'primary', text: 'Add key' });
+  form.appendChild(labelInput);
+  form.appendChild(valueInput);
+  if (baseURLInput) form.appendChild(baseURLInput);
+  form.appendChild(modelInput);
+  form.appendChild(submit);
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      await postJson('/api/keys', {
+        provider: providerName,
+        label: labelInput.value,
+        value: valueInput.value,
+        baseURL: baseURLInput ? baseURLInput.value : undefined,
+        model: modelInput.value,
+      });
+      labelInput.value = '';
+      valueInput.value = '';
+      if (baseURLInput) baseURLInput.value = '';
+      modelInput.value = '';
+      await refresh();
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+  return form;
+}
+
+function renderProviderSection(providerName, providerState, usageByKey) {
+  const section = el('div', {}, []);
+  section.appendChild(el('h2', { class: 'section-title', text: `${PROVIDER_DISPLAY[providerName]} keys · default model ${providerState.defaultModel}` }));
+  const card = el('div', { class: 'card' }, []);
+  const showBaseURL = providerName === 'openai';
+  if (providerState.keys.length === 0) {
+    card.appendChild(el('p', { class: 'empty-state', text: 'No keys yet — add one below.' }));
+  } else {
+    const table = el('table', {}, []);
+    const headerCells = [
+      el('th', { text: 'Label' }),
+      el('th', { text: 'Value' }),
+      el('th', { text: 'Status' }),
+    ];
+    if (showBaseURL) headerCells.push(el('th', { text: 'Base URL' }));
+    headerCells.push(el('th', { text: 'Model' }));
+    headerCells.push(el('th', { text: 'Usage' }));
+    headerCells.push(el('th', { text: '' }));
+    table.appendChild(el('tr', {}, headerCells));
+    for (const key of providerState.keys) {
+      table.appendChild(renderKeyRow(key, usageByKey, providerName));
+    }
+    card.appendChild(table);
+  }
+  card.appendChild(el('p', { class: 'hint', text: "A key's own Model (if set) always overrides the ask_chatgpt tool call's model param." }));
+  card.appendChild(renderAddKeyForm(providerName, providerState.defaultModel));
+  section.appendChild(card);
+  return section;
+}
+
+function renderSecretRow(labelText, currentMasked, settingKey, inputType) {
+  const row = el('div', { class: 'settings-row' }, []);
+  row.appendChild(el('label', { text: `${labelText} — ${currentMasked ? `current: ${currentMasked}` : 'not set'}` }));
+  const input = el('input', { type: inputType, placeholder: 'New value' });
+  const saveBtn = el('button', { text: 'Save' });
+  saveBtn.addEventListener('click', async () => {
+    if (!input.value) return;
+    try {
+      await postJson('/api/settings', { [settingKey]: input.value }, 'PATCH');
+      await refresh();
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+  const clearBtn = el('button', { class: 'danger', text: 'Clear' });
+  clearBtn.addEventListener('click', async () => {
+    try {
+      await postJson('/api/settings', { [settingKey]: '' }, 'PATCH');
+      await refresh();
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+  row.appendChild(input);
+  row.appendChild(saveBtn);
+  row.appendChild(clearBtn);
+  return row;
+}
+
+function renderAppSettings(settings) {
+  const container = document.getElementById('app-settings-container');
+  container.textContent = '';
+  const card = el('div', { class: 'card' }, []);
+
+  const portRow = el('div', { class: 'settings-row' }, []);
+  portRow.appendChild(el('label', { text: `Web dashboard port — current: ${settings.webConfigPort}` }));
+  const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: String(settings.webConfigPort) });
+  const portSaveBtn = el('button', { text: 'Save' });
+  portSaveBtn.addEventListener('click', async () => {
+    if (!portInput.value) return;
+    try {
+      await postJson('/api/settings', { webConfigPort: Number(portInput.value) }, 'PATCH');
+      showError('Port saved — restart `npm run web` for it to take effect.');
+      await refresh();
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+  portRow.appendChild(portInput);
+  portRow.appendChild(portSaveBtn);
+  card.appendChild(portRow);
+  card.appendChild(el('p', { class: 'hint', text: 'Changing the port only takes effect after restarting npm run web.' }));
+
+  card.appendChild(renderSecretRow('Telegram bot token', settings.telegram.botToken, 'telegramBotToken', 'password'));
+  card.appendChild(renderSecretRow('Telegram chat ID', settings.telegram.chatId, 'telegramChatId', 'text'));
+  card.appendChild(renderSecretRow('Slack webhook URL', settings.slack.webhookUrl, 'slackWebhookUrl', 'password'));
+  card.appendChild(el('p', { class: 'hint', text: 'Both Telegram fields must be set for that channel to activate. A channel with no value is skipped silently.' }));
+
+  container.appendChild(card);
+}
+
+let toastTimer;
+function showError(message) {
+  const box = document.getElementById('error-box');
+  box.textContent = message;
+  box.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => box.classList.remove('visible'), 5000);
+}
+
+async function refresh() {
+  const [state, settings] = await Promise.all([fetchState(), fetchSettings()]);
+  renderProviderSwitch(state);
+  renderUsageSummary(state.usage);
+  const container = document.getElementById('providers-container');
+  container.textContent = '';
+  container.appendChild(renderProviderSection('openai', state.providers.openai, state.usage.byKey));
+  container.appendChild(renderProviderSection('gemini', state.providers.gemini, state.usage.byKey));
+  renderAppSettings(settings);
+}
+
+refresh().catch((e) => showError(e.message));
+</script>
+</body>
+</html>

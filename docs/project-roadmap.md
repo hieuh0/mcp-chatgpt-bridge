@@ -2,35 +2,42 @@
 
 ## Current State (v0.1.0)
 
-**Status:** Demo / personal-use project.
+**Status:** Demo / personal-use project, post-refactor.
 
-- Single tool `ask_chatgpt` working end-to-end: Claude Code → MCP server → OpenAI/OpenRouter → answer + Telegram/Slack push.
-- Verified in production testing (2026-07-09): real OpenRouter API calls + Telegram delivery confirmed.
+- Single tool `ask_chatgpt` working end-to-end: Claude Code → MCP server → Active provider (OpenAI or Gemini) → answer + Telegram/Slack push.
+- Dual-provider support implemented: OpenAI (live-tested with OpenRouter, 2026-07-09), Gemini (code complete, SDK verified, not yet live-tested).
+- SQLite config + web dashboard for runtime key/provider/setting management (no env vars required after initial bootstrap).
+- Usage tracking with LRU key rotation and 429 cooldown built-in.
+- Git repository initialized (commit `bb90e1a`).
 - No test suite.
 - No CI/CD pipeline.
-- No git repository initialized yet.
 
 ## Known Gaps & Open Items
 
-### 1. Rate-Limiting & Cost-Cap (High Priority)
+### 1. Rate-Limiting & Cost-Cap (Partially Addressed)
 
-**Issue:** No enforcement of rate limits or maximum token spend per session.
+**Issue:** No enforcement of hard rate limits or maximum token spend per session.
 
-**Current behavior:**
-- Each call goes directly to OpenAI/OpenRouter.
-- No check on accumulated cost, daily quota, or call frequency.
-- If a loop or auto-consult enforcement gets stuck, ChatGPT can be called repeatedly, leading to unexpected charges.
+**Current mitigation:**
+- **Key rotation (LRU):** Multiple keys per provider allow load distribution. If one key hits quota, others can still be used.
+- **429 cooldown (60s):** When a key is rate-limited, it enters cooldown and the next call tries another key automatically.
+- **Usage logging:** Every call is logged to SQLite (tokens, provider, key, timestamp, outcome), enabling manual quota review.
+
+**What's still missing:**
+- No hard cap on tokens per session / per day / per calendar month.
+- No automatic rejection when threshold is exceeded.
+- No cost estimation before call (would require token estimation without making the call).
+- No per-user quotas (MCP client doesn't provide caller context).
 
 **Possible approaches:**
-- Server-side token counter: Track tokens in this session, warn/reject after threshold.
-- Time-based throttling: Allow max 1 call per N seconds; queue excess requests.
-- Cost estimation before call: Estimate tokens, check against budget, error if over.
-- Per-user quotas: Track by caller identity (if MCP client provides context).
+- Server-side session token counter: Track tokens in this session, warn/reject after threshold. Risk: token counting is lossy (estimates before call, actual differs).
+- Daily/monthly quota ledger: Maintain a quota per key or global, decrement on each call. Risk: quota exhaustion blocks all calls equally.
+- Cost estimation + budget check: Estimate tokens from context length, check against budget before calling API. Risk: estimate may be inaccurate.
 
-**Status:** Unresolved. Requires product decision on:
-- What threshold to enforce (tokens per session? per day? per calendar month?).
-- How to communicate limits to Claude Code (error, warning, metadata).
-- Whether to implement server-side (this tool) or rely on external rate limiter.
+**Status:** Partially mitigated. Unresolved if hard cap is required. Requires product decision on:
+- Is soft mitigation (LRU rotation + cooldown + logging) sufficient for demo use?
+- If hard cap needed: what threshold (tokens per session? per day?), and how to communicate (error vs warning)?
+- Whether to implement server-side or rely on external cost-control service.
 
 ### 2. Test Suite (Medium Priority)
 
@@ -60,15 +67,79 @@
 
 ### 4. Git Repository Initialization (Admin Task)
 
-**Status:** Not initialized yet in `/Users/hieuho/Desktop/mcp`.
+**Status:** ✅ Done (commit `bb90e1a` initialized). Standard git workflow ready.
+
+**Notes:**
+- Hooks are in place (`install-hooks.cjs` copies them to `~/.claude/hooks`).
+- Code is committable (no secrets hardcoded; all config in SQLite + env bootstrap).
+
+**Not critical for demo phase — completed with initial refactor.**
+
+### 5. Gemini Path Live Testing (Medium Priority)
+
+**Status:** ✅ Code complete and verified, but not yet live-tested.
+
+**What's done:**
+- Provider interface implemented (`gemini-provider.ts`, ~70 LOC).
+- Google `@google/genai` SDK field names verified against GitHub source (response.text, response.usageMetadata, etc.).
+- Type compilation successful.
+- Zod schema validation in place.
+
+**What's pending:**
+- No live API call made (no Gemini API key available at refactor time).
+- Actual response handling untested in production.
+- Token counting accuracy on Gemini responses unverified.
+
+**How to unblock:** Create a Gemini API key via Google AI Studio, add it to the dashboard, select Gemini as active provider, and make a test call. If successful, mark this as resolved.
+
+**Not blocking v0.1.0 (OpenAI path verified); needed before using Gemini in production.**
+
+### 6. Dashboard Authentication (Low Priority, Noted Limitation)
+
+**Issue:** Web dashboard (`npm run web`) has no authentication.
+
+**Current design:**
+- Bound to `127.0.0.1` only (never configurable to bind elsewhere).
+- SQLite has no user/permissions model.
+- Suitable for **local single-user demo use only**.
 
 **Why it matters:**
-- Cleaner history if this project is shared or maintained long-term.
-- Standard branching & PR workflows.
+- If the dashboard is exposed to a network (directly or via port forwarding), anyone with access can view masked API keys and modify settings.
+- No audit trail of who changed what.
 
-**Not critical for demo phase.**
+**Possible mitigations (for future):**
+- Add a simple password/token check (requires minor HTTP middleware).
+- Add mTLS or OAuth2 if multi-user access is needed.
+- Implement SQLite row-level security (complex, probably overkill).
 
-### 5. Configurable System Prompt (Low Priority)
+**Current recommendation:** Keep this project **local-only** (not exposed to networks). For remote access, use a VPN or SSH tunnel to localhost:4141.
+
+**Not planned for v0.1.0 (demo phase); required if scaling to shared/multi-user.**
+
+### 7. Usage Events Unbounded Growth (Low Priority, Noted Limitation)
+
+**Issue:** `usage_events` table has no retention policy.
+
+**Current state:**
+- Every `ask_chatgpt` call appends a record (timestamp, provider, key, model, tokens, ok/error).
+- No automatic cleanup or archival.
+- Over months, the table can grow large and slow down aggregations.
+
+**Why it matters:**
+- Storage space (negligible for local SQLite, but good practice).
+- Aggregation query performance (indexes help, but unbounded growth is a code smell).
+- Compliance: long-term audit log might be needed (or not, depending on product).
+
+**Possible approaches:**
+- Add a cron job or startup task to delete events older than N days.
+- Archive old events to a separate table or file periodically.
+- Add a `/admin/cleanup` endpoint to manually delete old events (for dashboard).
+
+**Current workaround:** Manual SQL delete (user must manage DB file).
+
+**Not blocking v0.1.0; suggested for v0.2.0 if usage grows.**
+
+### 8. Configurable System Prompt (Low Priority)
 
 **Current:** System prompt is hardcoded (Vietnamese, fixed structure).
 
@@ -81,7 +152,7 @@
 
 **Not planned for v0.1.0; consider for v0.2.0 if multi-language support is needed.**
 
-### 6. Persistent Audit Log (Very Low Priority)
+### 9. Persistent Audit Log (Very Low Priority)
 
 **Current:** Errors logged to console; no persistent log file.
 
@@ -89,31 +160,33 @@
 - Long-term record of what was asked and what ChatGPT said.
 - Compliance / review if this becomes production-critical.
 
-**Current workaround:** Telegram/Slack archive serves as audit trail.
+**Current workaround:** Telegram/Slack archive serves as audit trail, and usage_events table logs all calls.
 
 **Not planned unless compliance requirement emerges.**
 
 ## Next Steps (Immediate)
 
-1. **Resolve rate-limit gap** — Discuss threshold and approach with product owner (user).
-2. **Add test suite** — Improve confidence in error handling and edge cases.
-3. **Initialize git** — Clean commit history and standard workflows.
+1. **Live-test Gemini path** — Create a Gemini API key, add to dashboard, test a call to unblock Gemini production use.
+2. **Optional: Add test suite** — Improve confidence in error handling, key rotation logic, and provider dispatch.
+3. **Optional: Add CI/CD** — GitHub Actions for lint/build/test on PR, if this project is shared or maintained long-term.
 
 ## Future Scenarios
 
 ### If used beyond personal demo:
 
-- Add authentication / per-user quotas.
-- Integrate with cost tracking (e.g., Stripe, internal billing).
-- Add metrics (call count, avg latency, error rate).
-- Scale to multiple endpoints (not just OpenAI-compatible).
+- **Multi-user support:** Add dashboard authentication (password, OAuth2, or mTLS). Bind to a network-facing host (requires careful security review). Track per-user quotas and cost.
+- **Cost tracking:** Integrate Stripe, OpenAI's usage API, or Gemini's quota dashboard to alert on spending. Consider implementing a session-level or daily token budget.
+- **Analytics:** Dashboard to visualize call volume, tokens over time, error rates by provider/key, popular question patterns.
+- **Provider scaling:** Add support for Claude (Anthropic API), Llama (via OpenAI-compatible endpoint), or other LLMs. Existing `Provider` interface makes this straightforward.
 
 ### If model landscape changes:
 
-- Support Claude, Gemini, or other LLMs as consultation sources (requires new client SDKs).
-- Allow per-call model selection (already supported in input, but limited by OpenAI SDK).
+- **Model list fetch:** The dashboard's per-key Model field is free-text (set per key, see `docs/code-standards.md`'s Configuration Storage section) — an API-driven dropdown fetching each provider's live model list would replace manual typing but isn't needed yet.
+- **Fallback providers:** If one provider is down, auto-failover to another. Requires circuit-breaker logic and provider health checks.
+- **Fine-tuned models:** Support for custom-trained models (OpenAI fine-tuning, etc.). Requires metadata tracking and per-call model specification.
 
 ### If Claude Code features evolve:
 
-- Hook may change; monitor for `CK_ASK_CHATGPT_GATE_*` env var updates.
-- New MCP capabilities may allow direct file access (reduces need for caller-provided context).
+- **Hook updates:** Monitor for changes to `CK_ASK_CHATGPT_GATE_DISABLED` env var or hook registration mechanism. Hook scripts are vendored here; update on release if behavior changes.
+- **MCP 2.0 capabilities:** New MCP versions may enable bidirectional file access or richer tool metadata. Could reduce need for caller-provided context in some use cases.
+- **Sampling & logging:** Future Claude Code versions may support request/response logging; consider integrating structured logs for compliance/audit.

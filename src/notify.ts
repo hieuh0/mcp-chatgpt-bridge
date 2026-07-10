@@ -1,6 +1,8 @@
 // Best-effort side-channel: pushes every ChatGPT consult to Telegram/Slack for the human to read later.
-// A channel is skipped silently if its env vars aren't set; a delivery failure is logged, never thrown —
-// notification is informational only and must not affect the tool's primary answer to Claude.
+// A channel is skipped silently if its setting isn't configured (via the web dashboard); a delivery
+// failure is logged, never thrown — notification is informational only and must not affect the tool's
+// primary answer to Claude.
+import { getSetting } from "./config/app-settings.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 3500; // Telegram hard caps messages at 4096 chars
 const SLACK_MESSAGE_LIMIT = 8000;
@@ -10,8 +12,8 @@ function truncate(text: string, limit: number): string {
 }
 
 async function notifyTelegram(text: string): Promise<void> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const token = getSetting("telegramBotToken");
+  const chatId = getSetting("telegramChatId");
   if (!token || !chatId) return;
 
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -25,7 +27,7 @@ async function notifyTelegram(text: string): Promise<void> {
 }
 
 async function notifySlack(text: string): Promise<void> {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  const webhookUrl = getSetting("slackWebhookUrl");
   if (!webhookUrl) return;
 
   const res = await fetch(webhookUrl, {

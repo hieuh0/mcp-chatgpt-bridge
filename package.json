@@ -9,14 +9,22 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "web": "node dist/web/server.js",
+    "install-hooks": "node scripts/install-hooks.cjs",
+    "disable-ask-chatgpt-gate": "node scripts/disable-ask-chatgpt-gate.cjs"
   },
   "dependencies": {
+    "@google/genai": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.13.0",
+    "better-sqlite3": "^11.0.0",
+    "express": "^4.21.0",
     "openai": "^5.10.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/express": "^4.17.0",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   },

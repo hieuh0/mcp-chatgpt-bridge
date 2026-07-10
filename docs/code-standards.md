@@ -16,16 +16,25 @@ This document describes the patterns and conventions actually present in the cod
 
 **Pattern:** Catch and map errors to user-friendly messages, never throw from a tool.
 
-In `index.ts`, the `ask_chatgpt` tool handler wraps OpenAI calls in try-catch:
+In `index.ts`, the `ask_chatgpt` tool handler wraps the active provider's call in try-catch, classifying by HTTP status so the hint text is generic across both providers:
 
 ```typescript
+function classifyErrorKind(status: number | undefined): string {
+  if (status === 401) return "401";
+  if (status === 429) return "429";
+  if (status !== undefined && status >= 500) return "5xx";
+  return "other";
+}
+
 catch (err) {
   const apiErr = err as { status?: number; message?: string };
+  const errorKind = classifyErrorKind(apiErr.status);
   let hint = apiErr.message || String(err);
-  if (apiErr.status === 401) {
-    hint = "OpenAI rejected the API key (401). Check OPENAI_API_KEY is valid and not expired.";
-  } else if (apiErr.status === 429) {
-    hint = "OpenAI rate-limited this request (429). Wait a few seconds and retry...";
+  if (errorKind === "401") {
+    hint = `${provider} rejected the API key (401). Check the key is valid and not expired in the web dashboard.`;
+  } else if (errorKind === "429") {
+    hint = `${provider} rate-limited this request (429). Wait a few seconds and retry...`;
+    keyStore.recordCallOutcome(provider, picked.key.id, { success: false, cooldownUntil: ... }); // only 429 touches rotation state
   }
   // ... etc
   return { content: [...], isError: true };
@@ -73,43 +82,40 @@ function truncate(text: string, limit: number, label: string): string {
 
 Apply truncation before passing to external APIs. Always note in the output when truncation occurred.
 
-## Environment Variables
+## Configuration Storage
 
-- Load via `process.env.*`; do not hardcode values.
-- Use sensible defaults where appropriate (e.g., `DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-5"`).
-- Document all expected env vars in `.env.example`.
-- Never log or console.log sensitive values (API keys, tokens).
+- No env vars for provider config. All API keys, active provider, web dashboard port, and notify secrets live in SQLite (`data.sqlite`, `settings`/`provider_keys` tables), managed exclusively via `npm run web`. Do not add a new `process.env.X` read for anything that belongs in this store — add a `getSetting`/`setSetting` entry instead (see `src/config/app-settings.ts`).
+- A default model per provider is a hardcoded code constant (`DEFAULT_MODEL` in each `src/providers/*.ts` file). A key can also carry its own `model` (`provider_keys.model`, set via the dashboard) — this exists because a key's `baseURL` can point at a different endpoint (OpenAI itself, OpenRouter, a self-hosted proxy) with its own model namespace, so the model has to travel with the key, not the provider. Resolution order in `src/index.ts`: `picked.key.model || toolCallModelParam || DEFAULT_MODEL` — the picked key's own model always wins over the tool call's `model` param.
+- The only env-var reads left are inside `migrateAppSettings()`/legacy migration — a ONE-TIME bootstrap from a previous setup, checked only if the corresponding SQLite setting doesn't already exist.
+- Never log or console.log sensitive values (API keys, tokens, webhook URLs) — use the `mask()` helper (`src/config/key-store.ts`) for any user-facing display of a secret.
 
 ## Auto-routing Logic
 
-For OpenRouter support, detect key format and auto-set endpoint:
+For OpenRouter support, detect key format and auto-set endpoint (`src/providers/openai-provider.ts`):
 
 ```typescript
 const OPENROUTER_KEY_PREFIX = "sk-or-";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
-const baseURL =
-  process.env.OPENAI_BASE_URL ||
+const resolvedBaseURL =
+  baseURL ?? // per-key base_url column, set via the dashboard — not an env var
   (apiKey.startsWith(OPENROUTER_KEY_PREFIX) ? OPENROUTER_BASE_URL : undefined);
 ```
 
 Do not require manual config for common provider transitions.
 
-## Lazy Initialization
+## Client Construction
 
-Initialize expensive resources (e.g., API clients) on first use, not at startup:
+Each provider builds its SDK client fresh inside `.ask()`, per call — not a cached singleton:
 
 ```typescript
-let client: OpenAI | undefined;
-function getClient(): OpenAI {
-  if (!client) {
-    client = new OpenAI({ apiKey, baseURL });
-  }
-  return client;
+async ask({ apiKey, baseURL }: AskParams): Promise<AskResult> {
+  const client = new OpenAI({ apiKey, baseURL: resolvedBaseURL });
+  // ...
 }
 ```
 
-This allows the server to start quickly even if the API is temporarily unavailable.
+Deliberate: the API key/base URL can differ on every call now (key rotation, dashboard edits between calls), so there's nothing stable to cache. Don't reintroduce a module-level singleton client.
 
 ## Notifications & Side-Effects
 
@@ -151,7 +157,7 @@ const MAX_INPUT_CHARS = 60_000;
 
 - **Variables:** camelCase (e.g., `apiKey`, `chatId`, `notifyChannels`).
 - **Constants:** SCREAMING_SNAKE_CASE (e.g., `OPENROUTER_KEY_PREFIX`, `MAX_INPUT_CHARS`).
-- **Functions:** camelCase, descriptive verbs (e.g., `getClient()`, `truncate()`, `notifyChannels()`).
+- **Functions:** camelCase, descriptive verbs (e.g., `pickKeyForCall()`, `truncate()`, `notifyChannels()`).
 - **Types:** PascalCase (from OpenAI SDK and MCP SDK imports).
 
 ## Testing
@@ -167,4 +173,4 @@ Currently no test suite. When tests are added, follow these conventions:
 - `npm run build` compiles to dist/.
 - `npm start` runs the compiled server.
 - `npm run dev` watches and recompiles on file change.
-- Always commit built `dist/` OR provide a build step in deployment; don't require build at runtime.
+- `dist/` is gitignored (not committed) — always run `npm run build` after pulling changes or editing `src/`, and rebuild + restart the MCP client to pick up changes (it doesn't hot-reload).
