@@ -44,11 +44,23 @@ app.use(express.json());
 // port. Reject cross-origin mutating requests; same-origin/no-Origin (curl, the dashboard
 // page itself) requests pass through.
 //
-// Compare against the actual Host header, not a hardcoded HOST:PORT — the browser may reach
-// this server via `localhost:PORT` or `127.0.0.1:PORT` (both resolve here), and same-origin
-// fetch() from the dashboard page sends whichever one the user typed in the address bar.
-// Hardcoding one would 403 every legitimate request whenever the other hostname is used.
+// Allow both hostnames a browser may use to reach this server (both resolve to the same
+// loopback interface) — same-origin fetch() from the dashboard page sends whichever one
+// the user typed in the address bar. Hardcoding one would 403 every legitimate request
+// whenever the other hostname is used.
+const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
+
+// [Security fix — DNS rebinding] The previous check only compared `Origin` against
+// `Host`, which a DNS-rebinding attacker fully controls on both sides (a page served from
+// their own domain, later rebound to resolve to 127.0.0.1, sends a matching Origin/Host
+// pair that isn't actually this server's loopback address). Validate `Host` against an
+// explicit allowlist first — this is what actually anchors the check to "this server",
+// not just "these two headers agree with each other".
 function requireSameOrigin(req: Request, res: Response, next: NextFunction): void {
+  if (!req.headers.host || !ALLOWED_HOSTS.has(req.headers.host)) {
+    res.status(403).json({ error: "Invalid host" });
+    return;
+  }
   const origin = req.headers.origin;
   if (origin && origin !== `http://${req.headers.host}`) {
     res.status(403).json({ error: "Cross-origin requests are not allowed" });
