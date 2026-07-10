@@ -75,6 +75,8 @@ The dashboard supports multiple keys per provider. When a call is made:
 | Feature | Details |
 |---------|---------|
 | **Add key** | Label, API key value, optional base URL (OpenAI-only, for compatible endpoints like OpenRouter), optional model (both providers; overrides tool param and DEFAULT_MODEL) |
+| **Fetch models** | OpenAI-only button next to the Model field (Add-key form and row Edit mode) — calls the target endpoint's model-list API server-side and suggests results via a `<datalist>`; free-text entry still works if the fetch fails or isn't used |
+| **Edit key** | Change label, base URL, or model on an existing key without deleting/recreating it |
 | **Enable/disable key** | Toggle whether a key is eligible for rotation |
 | **View masked keys** | Shows only the last 4 characters for security |
 | **Active provider** | Switch between OpenAI and Gemini (affects all `ask_chatgpt` calls until changed) |

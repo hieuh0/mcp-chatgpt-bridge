@@ -57,6 +57,20 @@ export function getKeyProvider(id: string): ProviderName | undefined {
   return row?.provider;
 }
 
+// Deliberately narrow — used only by the "fetch models" server route to make an outbound
+// call on the key's behalf. Do not widen into a general "get raw key" accessor; `enabled`
+// is included so the caller can reject a disabled key instead of silently using it.
+export function getKeyForFetchModels(
+  id: string
+): { provider: ProviderName; value: string; baseURL?: string; enabled: boolean } | undefined {
+  const row = db.prepare(`SELECT provider, value, base_url, enabled FROM provider_keys WHERE id = @id`).get({
+    id,
+  }) as { provider: ProviderName; value: string; base_url: string | null; enabled: number } | undefined;
+  return row
+    ? { provider: row.provider, value: row.value, baseURL: row.base_url ?? undefined, enabled: row.enabled === 1 }
+    : undefined;
+}
+
 // The single place `activeProvider` is read from `settings` — every downstream
 // `provider === "openai" ? ... : ...` dispatch trusts this value without re-validating.
 export function getActiveProvider(): ProviderName {

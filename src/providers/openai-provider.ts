@@ -9,10 +9,17 @@ export const DEFAULT_MODEL = "gpt-5";
 const OPENROUTER_KEY_PREFIX = "sk-or-";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
+// `undefined` here (not a concrete default string) is deliberate: the OpenAI SDK only
+// consults the `OPENAI_BASE_URL` env var when `baseURL` is omitted from its constructor.
+// Forcing a concrete string — even one equal to the SDK's own default — would silently
+// disable that fallback for anyone relying on it without a per-key baseURL set.
+export function resolveOpenAIBaseURL(apiKey: string, baseURL?: string): string | undefined {
+  return baseURL ?? (apiKey.startsWith(OPENROUTER_KEY_PREFIX) ? OPENROUTER_BASE_URL : undefined);
+}
+
 export const openaiProvider: Provider = {
   async ask({ question, context, model, apiKey, baseURL }: AskParams): Promise<AskResult> {
-    const resolvedBaseURL = baseURL ?? (apiKey.startsWith(OPENROUTER_KEY_PREFIX) ? OPENROUTER_BASE_URL : undefined);
-    const client = new OpenAI({ apiKey, baseURL: resolvedBaseURL });
+    const client = new OpenAI({ apiKey, baseURL: resolveOpenAIBaseURL(apiKey, baseURL) });
 
     const response = await client.responses.create({
       model,

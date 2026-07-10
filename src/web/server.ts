@@ -2,11 +2,13 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
+import dns from "node:dns/promises";
 import {
   addKey,
   deleteKey,
   ensureMigrated,
   getActiveProvider,
+  getKeyForFetchModels,
   getKeyProvider,
   isValidProvider,
   listKeysMasked,
@@ -16,7 +18,7 @@ import {
 } from "../config/key-store.js";
 import { deleteSetting, getSetting, migrateAppSettings, setSetting } from "../config/app-settings.js";
 import { summarize } from "../usage/usage-aggregator.js";
-import { DEFAULT_MODEL as OPENAI_DEFAULT_MODEL } from "../providers/openai-provider.js";
+import { DEFAULT_MODEL as OPENAI_DEFAULT_MODEL, resolveOpenAIBaseURL } from "../providers/openai-provider.js";
 import { DEFAULT_MODEL as GEMINI_DEFAULT_MODEL } from "../providers/gemini-provider.js";
 
 // Idempotent — safe to run here even if the MCP stdio process already ran these at its
@@ -67,6 +69,87 @@ function requireSameOrigin(req: Request, res: Response, next: NextFunction): voi
     return;
   }
   next();
+}
+
+// Stricter than requireSameOrigin: REQUIRES Origin to be present and match, rather than
+// merely rejecting a *mismatched* Origin. requireSameOrigin's no-Origin passthrough is
+// deliberate for the older mutating routes (curl/script convenience) but is not
+// acceptable for the fetch-models routes below — they send a real secret to a
+// request-influenced destination, so a non-browser local caller with no Origin header
+// must not pass.
+function requireSameOriginStrict(req: Request, res: Response, next: NextFunction): void {
+  if (!req.headers.host || !ALLOWED_HOSTS.has(req.headers.host)) {
+    res.status(403).json({ error: "Invalid host" });
+    return;
+  }
+  if (!req.headers.origin || req.headers.origin !== `http://${req.headers.host}`) {
+    res.status(403).json({ error: "Origin header required and must match this server" });
+    return;
+  }
+  next();
+}
+
+// Ranges a "fetch models" convenience call must never reach, regardless of what the
+// request claims — this endpoint sends a real Bearer token wherever it's pointed, so
+// "the URL parses and uses http/https" (validateBaseURL) is not sufficient on its own.
+function isForbiddenTarget(rawIp: string): boolean {
+  // Strip an IPv4-mapped-IPv6 prefix ("::ffff:127.0.0.1" -> "127.0.0.1") so the IPv4
+  // checks below can't be bypassed by a resolver returning that notation instead.
+  const ip = rawIp.replace(/^::ffff:/i, "");
+  if (/^127\./.test(ip)) return true;
+  if (/^169\.254\./.test(ip)) return true;
+  if (/^10\./.test(ip)) return true;
+  if (/^192\.168\./.test(ip)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) return true; // 100.64.0.0/10 (CGNAT)
+  if (ip === "0.0.0.0") return true;
+  if (ip === "::1") return true;
+  if (/^f[cd][0-9a-f]{2}:/i.test(ip)) return true; // fc00::/7 (unique-local)
+  if (/^fe80:/i.test(ip)) return true; // fe80::/10 (link-local)
+  return false;
+}
+
+// Resolves the hostname and rejects loopback/link-local/private destinations — closes the
+// gap validateBaseURL leaves open (it only checks scheme, never where the URL points).
+async function validateFetchModelsTarget(baseURL: string): Promise<string | null> {
+  let hostname: string;
+  try {
+    hostname = new URL(baseURL).hostname;
+  } catch {
+    return "baseURL must be a valid URL";
+  }
+  let addresses: string[];
+  try {
+    const result = await dns.lookup(hostname, { all: true });
+    addresses = result.map((r) => r.address);
+  } catch {
+    return "Could not resolve baseURL host";
+  }
+  if (addresses.length === 0 || addresses.some(isForbiddenTarget)) {
+    return "baseURL resolves to a disallowed address (loopback/private/link-local)";
+  }
+  return null;
+}
+
+// Shared by both fetch-models routes below. `redirect: "manual"` + treating any 3xx as a
+// failure ensures a validated destination can't be silently bypassed via a redirect.
+async function fetchModelIds(apiKey: string, baseURL: string): Promise<string[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(`${baseURL.replace(/\/$/, "")}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+      redirect: "manual",
+    });
+    if (res.status >= 300 && res.status < 400) throw new Error("upstream returned a redirect");
+    if (!res.ok) throw new Error(`upstream returned ${res.status}`);
+    const body = (await res.json()) as { data?: Array<{ id?: string }> };
+    const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === "string");
+    return [...new Set(ids)].sort();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 app.get("/", (_req, res) => {
@@ -195,6 +278,85 @@ app.delete("/api/keys/:id", requireSameOrigin, (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+// For the Add-key form, before the key is saved — the raw apiKey is only ever used for
+// this one outbound call, never persisted. requireSameOriginStrict (not the lenient
+// requireSameOrigin) + validateFetchModelsTarget guard the real secret this route sends
+// out. Entire body wrapped in one try/catch: this is the first async handler in this
+// file, and Express 4 does not forward a rejected promise to the error middleware below.
+app.post("/api/keys/fetch-models", requireSameOriginStrict, async (req, res) => {
+  try {
+    // No `provider` field — this route only exists for the openai Add-key form (Phase 2
+    // never renders its "Fetch models" button for gemini); unlike the GET route below, it
+    // never looks up a stored key's real provider, so there is no "wrong provider" input.
+    const { apiKey, baseURL } = req.body ?? {};
+    if (typeof apiKey !== "string" || !apiKey.trim()) {
+      res.status(400).json({ error: "apiKey is required" });
+      return;
+    }
+    const baseURLError = validateBaseURL("openai", baseURL);
+    if (baseURLError) {
+      res.status(400).json({ error: baseURLError });
+      return;
+    }
+    const trimmedBaseURL = typeof baseURL === "string" && baseURL.trim() ? baseURL.trim() : undefined;
+    if (trimmedBaseURL) {
+      const targetError = await validateFetchModelsTarget(trimmedBaseURL);
+      if (targetError) {
+        res.status(400).json({ error: targetError });
+        return;
+      }
+    }
+    const resolved = resolveOpenAIBaseURL(apiKey.trim(), trimmedBaseURL) ?? "https://api.openai.com/v1";
+    const models = await fetchModelIds(apiKey.trim(), resolved);
+    res.json({ models });
+  } catch (err) {
+    res.status(502).json({ error: `Could not fetch models: ${err instanceof Error ? err.message : "unknown error"}` });
+  }
+});
+
+// For an already-saved key's row-edit mode — the client never has the raw key (only
+// masked), so the server looks up its own stored value by id and makes the call itself.
+app.get("/api/keys/:id/fetch-models", requireSameOriginStrict, async (req, res) => {
+  try {
+    const key = getKeyForFetchModels(req.params.id);
+    if (!key) {
+      res.status(404).json({ error: "key not found" });
+      return;
+    }
+    if (key.provider !== "openai") {
+      res.status(400).json({ error: "Model listing is only supported for openai keys" });
+      return;
+    }
+    if (!key.enabled) {
+      res.status(400).json({ error: "Key is disabled — enable it first to fetch its models" });
+      return;
+    }
+    const queryBaseURL = req.query.baseURL;
+    if (queryBaseURL !== undefined && typeof queryBaseURL !== "string") {
+      res.status(400).json({ error: "baseURL must be a single string value" });
+      return;
+    }
+    const baseURLError = validateBaseURL("openai", queryBaseURL);
+    if (baseURLError) {
+      res.status(400).json({ error: baseURLError });
+      return;
+    }
+    const effectiveBaseURL = (queryBaseURL?.trim() || key.baseURL) ?? undefined;
+    if (effectiveBaseURL) {
+      const targetError = await validateFetchModelsTarget(effectiveBaseURL);
+      if (targetError) {
+        res.status(400).json({ error: targetError });
+        return;
+      }
+    }
+    const resolved = resolveOpenAIBaseURL(key.value.trim(), effectiveBaseURL) ?? "https://api.openai.com/v1";
+    const models = await fetchModelIds(key.value.trim(), resolved);
+    res.json({ models });
+  } catch (err) {
+    res.status(502).json({ error: `Could not fetch models: ${err instanceof Error ? err.message : "unknown error"}` });
+  }
 });
 
 app.get("/api/settings", (_req, res) => {

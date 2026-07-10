@@ -206,6 +206,18 @@ Keeping a log of every call (tokens used, provider, key, timestamp, outcome) ena
 
 This project is designed for **local single-user demo use**. The dashboard is bound to `127.0.0.1` only (never configurable to another host) and SQLite has no user/auth model. If scaling to multi-user or remote access is needed, authentication (OAuth2, mTLS, API keys) should be added as a separate layer.
 
+### Fetch-Models Routes: Outbound Requests Carrying a Real Secret
+
+`POST /api/keys/fetch-models` and `GET /api/keys/:id/fetch-models` (`src/web/server.ts`) let the dashboard populate the Model field's suggestions by calling an OpenAI-compatible endpoint's `GET {baseURL}/models` with a real API key as a Bearer token — the server makes this call on the caller's behalf, with a destination the request can partially influence (`baseURL`). This is qualitatively different from every other route in this file: those only read/write local SQLite state, this one sends a secret off-box.
+
+Two extra guards exist only for these two routes, beyond the standard `requireSameOrigin`/`validateBaseURL` used elsewhere:
+- **`requireSameOriginStrict`** — rejects a request with no `Origin` header at all (the existing lenient `requireSameOrigin`, used by every other mutating route, allows no-Origin requests so `curl`/scripts can call them; that's not acceptable here since a non-browser local caller with no Origin header must not be able to trigger an off-box secret exfiltration).
+- **`validateFetchModelsTarget`** — resolves the hostname via DNS and rejects loopback, link-local (including the `169.254.169.254` cloud-metadata address), RFC1918 private ranges, and CGNAT (`100.64.0.0/10`), for both a request-supplied `baseURL` and a previously-saved one used as a fallback. `validateBaseURL` alone only checks URL syntax/scheme, never the destination.
+
+**Accepted residual risk:** a same-origin browser context with DOM access to an already-open dashboard tab (e.g. a malicious browser extension) still passes both checks. This is accepted because it requires the attacker to already have code execution inside the user's browser on a tab where this specific local dashboard is open — a materially higher bar than "any local process" or "any cross-site page" — and such a context already has full read/write access to every other unauthenticated route in this file, not just these two. Closing that gap (e.g. a per-session CSRF token) would apply to the whole dashboard, not just this feature, and is out of scope here.
+
+This design was arrived at via adversarial red-team review before implementation (see `plans/260710-1355-fetch-models-dashboard/plan.md`'s `## Red Team Review` section) — the original design's stated mitigations (`validateBaseURL` + the existing lenient `requireSameOrigin` alone) did not actually close the SSRF/credential-exfiltration risk.
+
 ### Why Stdio Transport?
 
 MCP requires a transport. Stdio is simple, works in all environments, and integrates seamlessly with Claude Code's MCP client.

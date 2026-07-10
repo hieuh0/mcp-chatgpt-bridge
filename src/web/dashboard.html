@@ -174,6 +174,18 @@ async function postJson(url, body, method) {
   return res.json();
 }
 
+// Shared by the Add-key form (POST, has a body) and the row Edit mode (GET, no body) —
+// only the arguments differ between the two call sites, not the helper itself.
+async function fetchAndBindModels(url, method, body, datalistEl) {
+  try {
+    const data = await postJson(url, body, method);
+    datalistEl.textContent = '';
+    for (const id of data.models) datalistEl.appendChild(el('option', { value: id }));
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
 const PROVIDER_DISPLAY = { openai: 'OpenAI', gemini: 'Gemini' };
 
 function renderProviderSwitch(state) {
@@ -284,6 +296,17 @@ function renderKeyRow(key, usageByKey, providerName) {
     const modelInput = el('input', { type: 'text', placeholder: 'default', value: key.model || '' });
     modelTd.textContent = '';
     modelTd.appendChild(modelInput);
+    if (baseURLTd) {
+      const datalist = el('datalist', { id: `models-${key.id}` }, []);
+      modelInput.setAttribute('list', `models-${key.id}`);
+      modelTd.appendChild(datalist);
+      const fetchBtn = el('button', { type: 'button', text: 'Fetch models' });
+      fetchBtn.addEventListener('click', () => {
+        const q = baseURLInput.value ? `?baseURL=${encodeURIComponent(baseURLInput.value)}` : '';
+        fetchAndBindModels(`/api/keys/${key.id}/fetch-models${q}`, 'GET', undefined, datalist);
+      });
+      modelTd.appendChild(fetchBtn);
+    }
 
     actionsTd.textContent = '';
     const actions = el('div', { class: 'row-actions' }, []);
@@ -319,12 +342,27 @@ function renderAddKeyForm(providerName, defaultModel) {
   const baseURLInput = showBaseURL
     ? el('input', { type: 'text', placeholder: 'Base URL (optional, default: api.openai.com)' })
     : null;
-  const modelInput = el('input', { type: 'text', placeholder: `Model (optional, default: ${defaultModel})` });
+  const modelInputProps = { type: 'text', placeholder: `Model (optional, default: ${defaultModel})` };
+  if (showBaseURL) modelInputProps.list = 'models-add-openai';
+  const modelInput = el('input', modelInputProps);
   const submit = el('button', { type: 'submit', class: 'primary', text: 'Add key' });
   form.appendChild(labelInput);
   form.appendChild(valueInput);
   if (baseURLInput) form.appendChild(baseURLInput);
   form.appendChild(modelInput);
+  if (showBaseURL) {
+    const datalist = el('datalist', { id: 'models-add-openai' }, []);
+    form.appendChild(datalist);
+    const fetchBtn = el('button', { type: 'button', text: 'Fetch models' });
+    fetchBtn.addEventListener('click', () => {
+      if (!valueInput.value) {
+        showError('Enter an API key value first');
+        return;
+      }
+      fetchAndBindModels('/api/keys/fetch-models', 'POST', { apiKey: valueInput.value, baseURL: baseURLInput.value }, datalist);
+    });
+    form.appendChild(fetchBtn);
+  }
   form.appendChild(submit);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
