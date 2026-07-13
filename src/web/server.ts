@@ -3,6 +3,8 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
 import {
   addKey,
   deleteKey,
@@ -109,47 +111,110 @@ function isForbiddenTarget(rawIp: string): boolean {
   return false;
 }
 
-// Resolves the hostname and rejects loopback/link-local/private destinations — closes the
-// gap validateBaseURL leaves open (it only checks scheme, never where the URL points).
-async function validateFetchModelsTarget(baseURL: string): Promise<string | null> {
+// Resolves the hostname, rejects loopback/link-local/private destinations, and returns the
+// validated address to pin the actual request to. Returning the IP (not just an ok/error
+// verdict) closes a TOCTOU gap: if this function only validated and the caller re-resolved
+// the hostname itself for the real request, a DNS-rebinding attacker (TTL=0 record) could
+// serve a public address here and a private one moments later for the real connection.
+async function validateFetchModelsTarget(baseURL: string): Promise<{ ip: string } | { error: string }> {
   let hostname: string;
   try {
     hostname = new URL(baseURL).hostname;
   } catch {
-    return "baseURL must be a valid URL";
+    return { error: "baseURL must be a valid URL" };
   }
   let addresses: string[];
   try {
     const result = await dns.lookup(hostname, { all: true });
     addresses = result.map((r) => r.address);
   } catch {
-    return "Could not resolve baseURL host";
+    return { error: "Could not resolve baseURL host" };
   }
   if (addresses.length === 0 || addresses.some(isForbiddenTarget)) {
-    return "baseURL resolves to a disallowed address (loopback/private/link-local)";
+    return { error: "baseURL resolves to a disallowed address (loopback/private/link-local)" };
   }
-  return null;
+  // Every address here already passed the check above (`.some()` would have rejected
+  // otherwise), so any of them is safe to pin to — use the first.
+  return { ip: addresses[0] };
 }
 
-// Shared by both fetch-models routes below. `redirect: "manual"` + treating any 3xx as a
-// failure ensures a validated destination can't be silently bypassed via a redirect.
-async function fetchModelIds(apiKey: string, baseURL: string): Promise<string[]> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await fetch(`${baseURL.replace(/\/$/, "")}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: controller.signal,
-      redirect: "manual",
-    });
-    if (res.status >= 300 && res.status < 400) throw new Error("upstream returned a redirect");
-    if (!res.ok) throw new Error(`upstream returned ${res.status}`);
-    const body = (await res.json()) as { data?: Array<{ id?: string }> };
-    const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === "string");
-    return [...new Set(ids)].sort();
-  } finally {
-    clearTimeout(timeout);
-  }
+// Shared by both fetch-models routes below. Connects directly to `pinnedIp` (the address
+// validateFetchModelsTarget already checked) instead of letting the HTTP client re-resolve
+// the hostname, which is what actually closes the DNS-rebinding TOCTOU window — the
+// resolution used for the real request is the exact one that was validated, not a second,
+// independent lookup an attacker's nameserver could answer differently. `Host` header and
+// TLS `servername` still use the original hostname, so the request looks correct to the
+// server and certificate validation is checked against the real hostname, not the IP.
+// No manual redirect-following (matches the previous `redirect: "manual"` requirement) —
+// any 3xx is treated as a failure, same as before.
+async function fetchModelIds(apiKey: string, baseURL: string, pinnedIp: string): Promise<string[]> {
+  const url = new URL(baseURL);
+  const isHttps = url.protocol === "https:";
+  const client = isHttps ? https : http;
+  const requestPath = `${url.pathname.replace(/\/$/, "")}/models${url.search}`;
+
+  const body = await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      fn();
+    };
+
+    // A wall-clock deadline independent of the request's idle-timeout below: `options.timeout`
+    // only fires when the socket has been idle, which never happens if the connection dies
+    // mid-response without another event — this deadline fires regardless of socket state.
+    const deadline = setTimeout(() => {
+      req.destroy();
+      settle(() => reject(new Error("request timed out")));
+    }, 8000);
+
+    const req = client.request(
+      {
+        hostname: pinnedIp,
+        port: url.port || (isHttps ? 443 : 80),
+        path: requestPath,
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}`, Host: url.host },
+        // TLS SNI + certificate hostname verification target — keeps cert validation
+        // correct even though the socket connects to `pinnedIp`, not `url.hostname`.
+        servername: isHttps ? url.hostname : undefined,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400) {
+          res.resume();
+          settle(() => reject(new Error("upstream returned a redirect")));
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          res.resume();
+          settle(() => reject(new Error(`upstream returned ${status}`)));
+          return;
+        }
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          data += chunk;
+        });
+        res.on("end", () => settle(() => resolve(data)));
+        // Fires if the connection drops mid-response (reset, truncated body) without a
+        // clean 'end' — without this, the promise would never settle and the request
+        // would hang until the deadline above, or forever if that were ever removed.
+        res.on("close", () => {
+          if (!res.complete) settle(() => reject(new Error("upstream connection closed before response completed")));
+        });
+        res.on("error", (err) => settle(() => reject(err)));
+      }
+    );
+    req.on("error", (err) => settle(() => reject(err)));
+    req.end();
+  });
+
+  const parsed = JSON.parse(body) as { data?: Array<{ id?: string }> };
+  const ids = (parsed.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === "string");
+  return [...new Set(ids)].sort();
 }
 
 app.get("/", (_req, res) => {
@@ -301,15 +366,15 @@ app.post("/api/keys/fetch-models", requireSameOriginStrict, async (req, res) => 
       return;
     }
     const trimmedBaseURL = typeof baseURL === "string" && baseURL.trim() ? baseURL.trim() : undefined;
-    if (trimmedBaseURL) {
-      const targetError = await validateFetchModelsTarget(trimmedBaseURL);
-      if (targetError) {
-        res.status(400).json({ error: targetError });
-        return;
-      }
-    }
     const resolved = resolveOpenAIBaseURL(apiKey.trim(), trimmedBaseURL) ?? "https://api.openai.com/v1";
-    const models = await fetchModelIds(apiKey.trim(), resolved);
+    // Validated (and pinned) regardless of whether baseURL came from the request or a
+    // hardcoded default — the pinned IP is required either way for fetchModelIds below.
+    const target = await validateFetchModelsTarget(resolved);
+    if ("error" in target) {
+      res.status(400).json({ error: target.error });
+      return;
+    }
+    const models = await fetchModelIds(apiKey.trim(), resolved, target.ip);
     res.json({ models });
   } catch (err) {
     res.status(502).json({ error: `Could not fetch models: ${err instanceof Error ? err.message : "unknown error"}` });
@@ -344,15 +409,15 @@ app.get("/api/keys/:id/fetch-models", requireSameOriginStrict, async (req, res) 
       return;
     }
     const effectiveBaseURL = (queryBaseURL?.trim() || key.baseURL) ?? undefined;
-    if (effectiveBaseURL) {
-      const targetError = await validateFetchModelsTarget(effectiveBaseURL);
-      if (targetError) {
-        res.status(400).json({ error: targetError });
-        return;
-      }
-    }
     const resolved = resolveOpenAIBaseURL(key.value.trim(), effectiveBaseURL) ?? "https://api.openai.com/v1";
-    const models = await fetchModelIds(key.value.trim(), resolved);
+    // Validated (and pinned) regardless of whether baseURL came from the request, the
+    // key's stored value, or a hardcoded default — the pinned IP is required either way.
+    const target = await validateFetchModelsTarget(resolved);
+    if ("error" in target) {
+      res.status(400).json({ error: target.error });
+      return;
+    }
+    const models = await fetchModelIds(key.value.trim(), resolved, target.ip);
     res.json({ models });
   } catch (err) {
     res.status(502).json({ error: `Could not fetch models: ${err instanceof Error ? err.message : "unknown error"}` });
