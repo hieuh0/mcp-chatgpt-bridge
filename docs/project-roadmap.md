@@ -164,6 +164,7 @@
 - Web dashboard new "Activity log (today)" section with "Sync" button: fetches today's log via `GET /api/logs/today` and renders each line with truncated preview (click to expand).
 - No log retention/rotation; files accumulate per day indefinitely (matches existing unbounded-growth posture of usage_events table).
 - `logs/*.log` matches existing `.gitignore` `*.log` pattern — no gitignore change needed.
+- **Hardening follow-up (2026-07-13):** Log files and directories created with owner-only permissions (`0o600` files, `0o700` directories) as defense-in-depth, since logs contain full question/context/answer text.
 
 **Historical context:** Prior decision was "errors logged to console only; not planned unless compliance requirement emerges." Superseded by explicit feature request and validation (brainstorm + plan approved). Full-text logging of question/context/answer is by design; API keys/tokens remain excluded from all logging.
 

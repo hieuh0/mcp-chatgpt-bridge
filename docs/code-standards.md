@@ -91,6 +91,8 @@ Apply truncation before passing to external APIs. Always note in the output when
 
   **Exception (by design):** The `ask_chatgpt` tool logs **full question + context text on tool invocation, and full answer text on success** to the daily log file (`logs/YYYY-MM-DD.log`) via `src/logger.ts`. This is an explicit, user-approved decision to maintain a complete audit trail of what was asked and what was answered, supporting future compliance/review. This does **not** contradict the no-secrets rule — API keys, tokens, and webhook URLs remain completely excluded from all logging (they are never visible in the log file or web dashboard). The full-text logging applies only to call context and answers, not credentials.
 
+  **Defense-in-depth (file permissions):** Log files and directories are created with restrictive permissions (`0o600` for files, `0o700` for directories), readable/writable by owner only, since the logged content includes full question/context/answer text.
+
 ## Auto-routing Logic
 
 For OpenRouter support, detect key format and auto-set endpoint (`src/providers/openai-provider.ts`):

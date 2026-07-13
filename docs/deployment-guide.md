@@ -75,12 +75,13 @@ The dashboard supports multiple keys per provider. When a call is made:
 | Feature | Details |
 |---------|---------|
 | **Add key** | Label, API key value, optional base URL (OpenAI-only, for compatible endpoints like OpenRouter), optional model (both providers; overrides tool param and DEFAULT_MODEL) |
-| **Fetch models** | OpenAI-only button next to the Model field (Add-key form and row Edit mode) — calls the target endpoint's model-list API server-side and suggests results via a `<datalist>`; free-text entry still works if the fetch fails or isn't used |
+| **Fetch models** | OpenAI-only button next to the Model field (Add-key form and row Edit mode) — calls the target endpoint's model-list API server-side and suggests results via a `<datalist>`; free-text entry still works if the fetch fails or isn't used. Includes SSRF/DNS-rebinding hardening (target IP pinning). |
 | **Edit key** | Change label, base URL, or model on an existing key without deleting/recreating it |
 | **Enable/disable key** | Toggle whether a key is eligible for rotation |
 | **View masked keys** | Shows only the last 4 characters for security |
 | **Active provider** | Switch between OpenAI and Gemini (affects all `ask_chatgpt` calls until changed) |
 | **Usage stats** | Total calls, tokens, by provider and by key |
+| **Activity log (today)** | View today's full activity log with timestamps, components, and message details. "Sync" button refreshes the log from the current file. Includes all API calls, HTTP requests, and errors. |
 | **Notify secrets** | Set Telegram (bot token + chat ID) and Slack (webhook URL) — both optional |
 | **Dashboard port** | Change the port (default 4141); requires restarting `npm run web` to take effect |
 
@@ -91,7 +92,7 @@ The dashboard supports multiple keys per provider. When a call is made:
   - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `WEB_CONFIG_PORT` — if set and the dashboard hasn't been used yet, these values are imported into the database. After that, all configuration goes through the dashboard; env vars are never consulted again for these settings.
 - **OpenRouter auto-detection.** OpenAI keys starting with `sk-or-` (OpenRouter format) are automatically routed to `https://openrouter.ai/api/v1`. For custom OpenAI-compatible endpoints, use the dashboard's optional "base URL" field per key.
 - **Per-key model configuration.** When set via the dashboard for a specific key, the `model` field overrides both the DEFAULT_MODEL and the `model` param passed to the `ask_chatgpt` tool call. Useful when a key is bound to a specific endpoint (like OpenRouter or a custom proxy) with its own model namespace. Omit to use DEFAULT_MODEL (gpt-5 for OpenAI, gemini-2.5-flash for Gemini) or the tool's `model` param.
-- **Telegram/Slack push.** Every `ask_chatgpt` call attempts to push the Q&A to both channels (if secrets are configured). A missing secret skips that channel silently (not an error). Delivery failures are logged to the console but never block the tool result.
+- **Telegram/Slack push.** Every `ask_chatgpt` call attempts to push the Q&A to both channels (if secrets are configured). A missing secret skips that channel silently (not an error). Delivery failures are logged to the daily activity log file (`logs/YYYY-MM-DD.log`) but never block the tool result.
 
 ## Auto-Consult Hooks
 

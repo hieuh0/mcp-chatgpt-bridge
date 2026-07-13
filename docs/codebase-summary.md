@@ -2,7 +2,7 @@
 
 ## Overview
 
-Refactored TypeScript server (~1440 LOC total across src/, excluding node_modules). Dual-provider AI advisor (OpenAI + Gemini) with SQLite config, web dashboard, usage tracking, and MCP stdio interface.
+Refactored TypeScript server (~1588 LOC total across src/, excluding node_modules). Dual-provider AI advisor (OpenAI + Gemini) with SQLite config, web dashboard, usage tracking, and MCP stdio interface.
 
 ## Core Files
 
@@ -65,7 +65,7 @@ interface AskUsage {
 }
 ```
 
-### `src/providers/openai-provider.ts` (~34 LOC)
+### `src/providers/openai-provider.ts` (~41 LOC)
 
 **OpenAI and OpenRouter implementation.**
 
@@ -118,7 +118,7 @@ interface AskUsage {
 - Sets db file to mode 0o600 (readable/writable by owner only).
 - Uses WAL journal mode to allow concurrent reads from web dashboard and MCP server.
 
-### `src/config/key-store.ts` (~207 LOC)
+### `src/config/key-store.ts` (~222 LOC)
 
 **API key management and provider selection.**
 
@@ -169,7 +169,7 @@ interface AskUsage {
 
 ## Web Dashboard Layer
 
-### `src/web/server.ts` (~239 LOC)
+### `src/web/server.ts` (~495 LOC)
 
 **Express server for dashboard and API.** No exports — a script that runs `ensureMigrated()`/`migrateAppSettings()` and `app.listen()` as side effects when executed via `npm run web` (or `node dist/web/server.js`). Binds `127.0.0.1:PORT` only, never configurable to another host, by design for single-user local use.
 
@@ -180,18 +180,26 @@ interface AskUsage {
 - `POST /api/keys` — Adds a new key (req.body.{provider, label, value, baseURL?, model?}). `baseURL` is OpenAI-only (rejected for Gemini keys; must use http/https scheme). `model` is optional for both providers. Both are validated and stored in the database.
 - `PATCH /api/keys/:id` — Updates a key (req.body.{enabled?, label?, baseURL?, model?}). Same validation as POST: `baseURL` is OpenAI-only, both fields support clear/leave/set semantics (omitted = unchanged, empty string = clear to NULL, non-empty = set).
 - `DELETE /api/keys/:id` — Deletes a key.
+- `POST /api/keys/fetch-models` — Fetches available models from an OpenAI-compatible endpoint server-side (for the Add-key form's model field datalist). Accepts `apiKey` and optional `baseURL` in body, returns `{models: string[]}`. Requires `requireSameOriginStrict` + DNS-rebinding/SSRF hardening (see below).
+- `GET /api/keys/:id/fetch-models` — Fetches available models for an already-saved key (for the row-edit form). Accepts optional `baseURL` query param (overrides the key's saved value). Returns `{models: string[]}`. Requires `requireSameOriginStrict` + DNS-rebinding/SSRF hardening.
+- `GET /api/logs/today` — Returns today's activity log file as plain text (not JSON), used by the dashboard's log viewer "Sync" button.
 - `GET /api/settings` — Returns masked notify secrets + current port setting.
 - `PATCH /api/settings` — Updates settings (Telegram/Slack/port). Empty string clears a setting.
 
 **CSRF-like protection:**
-- Mutating routes (POST/PATCH/DELETE) check the request's Origin header and reject cross-origin requests (or requests with no Origin header). Same-origin requests are allowed.
+- Mutating routes (POST/PATCH/DELETE) use `requireSameOrigin` middleware: check `Host` header against allowlist, then reject cross-origin requests (but allow requests with no Origin header for curl/script convenience). Same-origin requests are allowed.
+- The two `fetch-models` routes (POST/GET) use stricter `requireSameOriginStrict`: reject any request lacking an Origin header, because these routes handle real provider secrets sent to a request-influenced destination (SSRF/credential-exfiltration risk).
+- **SSRF/DNS-rebinding hardening chain for fetch-models routes:**
+  - `isForbiddenTarget(ip)` — Rejects loopback, link-local (169.254.0.0/16, including cloud-metadata 169.254.169.254), RFC1918 private (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), CGNAT (100.64.0.0/10), and IPv6 unique-local/link-local ranges.
+  - `validateFetchModelsTarget(baseURL)` — DNS-resolves the hostname, rejects if any address is forbidden, and returns the validated IP (never just an ok/error verdict). This return-the-resolved-IP design closes a DNS-rebinding TOCTOU: if validation only checked and the caller re-resolved for the real request, a TTL=0 DNS record could serve a public address to validation and a private one for the connection.
+  - `fetchModelIds(apiKey, baseURL, pinnedIp)` — Uses raw `node:http`/`node:https` connecting directly to the pinned IP (not via `fetch()`, which would re-resolve the hostname). Preserves the original `Host` header and TLS `servername` for correct cert validation. No redirect-following (3xx treated as error), 8-second deadline.
 - Designed for localhost-only use; not a substitute for proper auth if exposed to a network.
 
 **Port binding:**
 - Binds only to `127.0.0.1` (localhost). Never binds to 0.0.0.0 or another host.
 - Default port: 4141 (configurable via dashboard, but requires server restart to take effect).
 
-### `src/web/dashboard.html` (~465 LOC)
+### `src/web/dashboard.html` (~542 LOC)
 
 **Vanilla JavaScript SPA, no build step.**
 
@@ -207,7 +215,7 @@ interface AskUsage {
 
 ## Activity Logging Layer
 
-### `src/logger.ts` (~34 LOC)
+### `src/logger.ts` (~44 LOC)
 
 **Structured file-based activity logging to local disk.**
 
@@ -226,7 +234,7 @@ interface AskUsage {
 - No log rotation or retention — files accumulate indefinitely (same posture as unbounded `usage_events` table).
 - Logs full call context: `ask_chatgpt` tool logs the complete question + context text on call, and the complete answer text on success (explicit design decision for complete audit trail, approved by user).
 - Web server middleware logs every HTTP request: method, path, response status.
-- All `console.*` calls removed from source code — `logger.ts` is the sole output path for structured logging.
+- All `console.*` calls removed from source code — `logger.ts` is the sole output path for structured logging (no console output to stdout/stderr; all logging goes to the daily activity log file).
 
 ## Notification Layer
 
