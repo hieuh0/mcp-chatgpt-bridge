@@ -44,11 +44,14 @@ Claude Code calls the `ask_chatgpt` MCP tool via stdio. The server:
 1. Looks up the active provider (OpenAI or Gemini) from the SQLite config database.
 2. Picks an enabled API key for that provider (rotating among keys, respecting cooldown periods on rate-limited keys).
 3. Dispatches the call to the selected provider's implementation.
-4. Logs the call outcome to the usage_events table.
-5. Pushes the answer to Telegram/Slack (if configured, as a best-effort side-channel).
-6. Returns the answer to Claude Code.
+4. Logs the call outcome to the usage_events table (structured SQL log).
+5. Writes full activity to the daily plain-text log file (`logs/YYYY-MM-DD.log`) — logs full question/context/answer text and all HTTP requests.
+6. Pushes the answer to Telegram/Slack (if configured, as a best-effort side-channel).
+7. Returns the answer to Claude Code.
 
 All API keys, settings (web port, notify secrets), and usage records live in a local SQLite database. Configuration is done via the web dashboard (`npm run web`) — no env vars or dotenv files.
+
+**Activity Log:** Open the web dashboard, navigate to the "Activity log (today)" section, and click the "Sync" button to view today's full activity log. Each line shows the timestamp, component (mcp/web), level (INFO/ERROR), and message.
 
 Two Claude Code hooks push Claude to auto-consult: one hard-denies the `AskUserQuestion` tool call until `ask_chatgpt` has been called (the effective enforcement point), the other nags on plain-text questions ending in `?` (best-effort — no tool call to hard-block there). Both give up after 2 tries per session to avoid infinite loops, so this is a strong nudge, not a 100% guarantee.
 

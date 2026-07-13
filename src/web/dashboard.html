@@ -138,6 +138,12 @@
 <h2 class="section-title">App settings</h2>
 <div id="app-settings-container"></div>
 
+<h2 class="section-title">Activity log (today)</h2>
+<div class="card">
+  <button id="sync-log-btn" type="button">Sync</button>
+  <div id="log-viewer" style="max-height:400px;overflow:auto;"></div>
+</div>
+
 <div id="error-box" class="toast" role="alert"></div>
 
 <script>
@@ -149,6 +155,13 @@ async function fetchState() {
 async function fetchSettings() {
   const res = await fetch('/api/settings');
   return res.json();
+}
+
+const LOG_PREVIEW_LENGTH = 150;
+
+async function fetchTodayLog() {
+  const res = await fetch('/api/logs/today');
+  return res.text();
 }
 
 function el(tag, props, children) {
@@ -476,6 +489,32 @@ function renderAppSettings(settings) {
 
   container.appendChild(card);
 }
+
+function renderLogViewer(text) {
+  const container = document.getElementById('log-viewer');
+  container.textContent = '';
+  const lines = text.split('\n').filter((line) => line.length > 0);
+  if (lines.length === 0) {
+    container.textContent = '(empty)';
+    return;
+  }
+  for (const line of lines) {
+    const preview = line.length > LOG_PREVIEW_LENGTH ? `${line.slice(0, LOG_PREVIEW_LENGTH)}…` : line;
+    const details = el('details', {}, [
+      el('summary', { text: preview }, []),
+      el('pre', { text: line, style: 'white-space:pre-wrap;' }, []),
+    ]);
+    container.appendChild(details);
+  }
+}
+
+document.getElementById('sync-log-btn').addEventListener('click', async () => {
+  try {
+    renderLogViewer(await fetchTodayLog());
+  } catch (e) {
+    showError(e.message);
+  }
+});
 
 let toastTimer;
 function showError(message) {

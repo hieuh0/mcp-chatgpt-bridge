@@ -53,8 +53,14 @@ mcp-chatgpt-bridge is a lightweight MCP server that bridges Claude Code to dual-
 │  │                                               │ │
 │  │  ┌──────────────┐  ┌───────────────┐         │ │
 │  │  │ notify.ts    │  │ usage-logger  │         │ │
-│  │  │ (Tg/Slack)   │  │ (append event)│         │ │
+│  │  │ (Tg/Slack)   │  │ (SQL events)  │         │ │
 │  │  └──────────────┘  └───────────────┘         │ │
+│  │                                               │ │
+│  │  ┌──────────────────────────────────────┐    │ │
+│  │  │ logger.ts (plain-text file log)      │    │ │
+│  │  │ → logs/YYYY-MM-DD.log (per day)      │    │ │
+│  │  └──────────────────────────────────────┘    │ │
+│  │                                               │ │
 │  └────────────────┬──────────────────────────────┘ │
 │                   │                                 │
 │  ┌────────────────▼──────────────────────────────┐ │
@@ -130,12 +136,14 @@ Additional (external, global):
      - Catches exception and classifies error kind (401, 429, 5xx, or other).
      - If 429 (rate limit): calls `recordCallOutcome(provider, keyId, { success: false, cooldownUntil })`, which sets a 60-second cooldown on that key.
      - Other errors: `recordCallOutcome()` is called with the error kind, but no cooldown is applied (auto-retry/failover is out of scope).
+     - Calls `logError("mcp", "ask_chatgpt failed | ... | errorKind=${errorKind}", err)` — logs error detail to `logs/YYYY-MM-DD.log` file.
      - Returns error result to Claude Code immediately.
    - **Success path:**
      - Receives answer and usage metadata from provider.
      - Truncates answer to 20K chars.
      - Calls `recordCallOutcome(provider, keyId, { success: true })`, which updates `last_used_at` for that key.
      - Calls `appendUsageEvent()` to log the call (timestamp, provider, key ID, model, token counts, ok/error status).
+     - Calls `logInfo("mcp", "ask_chatgpt succeeded | ... | answer=${answer}")` — logs full answer text to `logs/YYYY-MM-DD.log` file.
      - **Awaits** `notifyChannels(text)` (a single pre-formatted message string) — the tool call does not return until this settles (it just never throws on failure).
      - Returns result to Claude Code only after that await resolves.
 4. **notify.ts (awaited by index.ts, Telegram/Slack POSTs run in parallel with each other):**
@@ -144,10 +152,14 @@ Additional (external, global):
    - Each POST:
      - Truncates to platform limit (Telegram 3500, Slack 8000).
      - POSTs to platform API.
-     - If response is not OK, logs error to console.
+     - If response is not OK, logs error to activity log file (`logs/YYYY-MM-DD.log`) via `logError()`.
    - Resolves (never throws).
 5. **Claude Code** receives answer on stdout and displays to user.
-6. **Human** (asynchronously, if desired) reviews notification in Telegram/Slack.
+6. **Web dashboard** (independently, asynchronously):
+   - Logs every HTTP request (method, path, status) to `logs/YYYY-MM-DD.log` via request middleware.
+   - Provides `GET /api/logs/today` route that returns today's log file as plain text.
+   - Renders log in dashboard's "Activity log (today)" section with a "Sync" button to refresh.
+7. **Human** (asynchronously, if desired) reviews notification in Telegram/Slack or the activity log in the dashboard.
 
 ### Error Handling
 
@@ -155,7 +167,7 @@ Additional (external, global):
 - **Invalid API key (401):** Error returned to Claude Code with hint; key is NOT auto-disabled (manual action via dashboard).
 - **Rate limited (429):** Key enters 60-second cooldown; if another key is available, next call uses it. If no other key available, error is returned.
 - **Provider backend error (5xx) or other non-429 error (including 401):** Error returned to Claude Code; `last_used_at` IS updated (pushing this key to the back of the LRU queue) even though no cooldown is applied, so the next call tries a different enabled key for that provider rather than retrying the same broken one.
-- **Telegram/Slack delivery fails:** Error logged to console (server-side); tool result is unaffected.
+- **Telegram/Slack delivery fails:** Error logged to activity log file (`logs/YYYY-MM-DD.log`) via `logError()` (server-side); tool result is unaffected.
 - **Network timeout:** Depends on provider SDK default; may appear as generic error with the provider's error kind classification.
 
 ## Key Design Decisions

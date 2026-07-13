@@ -1,5 +1,6 @@
 import { db } from "../config/db.js";
 import type { ProviderName } from "../config/key-store.js";
+import { logError } from "../logger.js";
 
 export interface UsageEvent {
   ts: string; // ISO 8601
@@ -25,6 +26,6 @@ export function appendUsageEvent(e: UsageEvent): void {
     insertStmt.run({ ...e, ok: e.ok ? 1 : 0, errorKind: e.errorKind ?? null });
   } catch (err) {
     // Fail-open — matches notify.ts's precedent: logging must never throw into the caller.
-    console.error("appendUsageEvent failed (non-fatal):", err);
+    logError("mcp", "appendUsageEvent failed (non-fatal)", err);
   }
 }

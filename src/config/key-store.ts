@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { db } from "./db.js";
 import { getSetting, setSetting } from "./app-settings.js";
+import { logError } from "../logger.js";
 
 export type ProviderName = "openai" | "gemini";
 
@@ -73,11 +74,11 @@ export function getKeyForFetchModels(
 
 // The single place `activeProvider` is read from `settings` — every downstream
 // `provider === "openai" ? ... : ...` dispatch trusts this value without re-validating.
-export function getActiveProvider(): ProviderName {
+export function getActiveProvider(component: "mcp" | "web"): ProviderName {
   const value = getSetting("activeProvider");
   if (!value || !isValidProvider(value)) {
     if (value) {
-      console.error(`getActiveProvider: invalid stored value "${value}", falling back to "openai"`);
+      logError(component, `getActiveProvider: invalid stored value "${value}", falling back to "openai"`);
     }
     return "openai";
   }

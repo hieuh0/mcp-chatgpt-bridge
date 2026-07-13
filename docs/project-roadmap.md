@@ -152,17 +152,22 @@
 
 **Not planned for v0.1.0; consider for v0.2.0 if multi-language support is needed.**
 
-### 9. Persistent Audit Log (Very Low Priority)
+### 9. Persistent Audit Log ✅ Implemented
 
-**Current:** Errors logged to console; no persistent log file.
+**Status:** Done (2026-07-13). File-based activity log with dashboard viewer.
 
-**Why it matters:**
-- Long-term record of what was asked and what ChatGPT said.
-- Compliance / review if this becomes production-critical.
+**What shipped:**
+- New `src/logger.ts`: exports `logInfo()`, `logError()`, `getTodayLogPath()`.
+- Plain-text log file at `logs/YYYY-MM-DD.log` (local date, one file per day).
+- All `console.*` calls removed from MCP server and web server, replaced with structured logging.
+- `ask_chatgpt` tool now logs **full question + context text on call, full answer text on success, error detail on failure** (explicit user-approved design decision for complete audit trail).
+- Web dashboard new "Activity log (today)" section with "Sync" button: fetches today's log via `GET /api/logs/today` and renders each line with truncated preview (click to expand).
+- No log retention/rotation; files accumulate per day indefinitely (matches existing unbounded-growth posture of usage_events table).
+- `logs/*.log` matches existing `.gitignore` `*.log` pattern — no gitignore change needed.
 
-**Current workaround:** Telegram/Slack archive serves as audit trail, and usage_events table logs all calls.
+**Historical context:** Prior decision was "errors logged to console only; not planned unless compliance requirement emerges." Superseded by explicit feature request and validation (brainstorm + plan approved). Full-text logging of question/context/answer is by design; API keys/tokens remain excluded from all logging.
 
-**Not planned unless compliance requirement emerges.**
+**Why full content logging:** Enables complete audit trail of what was asked and what was answered, supporting future compliance requirements and debugging.
 
 ## Next Steps (Immediate)
 

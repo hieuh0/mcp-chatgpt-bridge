@@ -41,11 +41,11 @@ catch (err) {
 }
 ```
 
-**In notify.ts,** failures are logged and never thrown:
+**In notify.ts,** failures are logged to the activity log and never thrown:
 
 ```typescript
 if (!res.ok) {
-  console.error(`Telegram notify failed (${res.status}): ${await res.text()}`);
+  logError("mcp", `Telegram notify failed (${res.status}): ${await res.text()}`);
 }
 ```
 
@@ -89,6 +89,8 @@ Apply truncation before passing to external APIs. Always note in the output when
 - The only env-var reads left are inside `migrateAppSettings()`/legacy migration — a ONE-TIME bootstrap from a previous setup, checked only if the corresponding SQLite setting doesn't already exist.
 - Never log or console.log sensitive values (API keys, tokens, webhook URLs) — use the `mask()` helper (`src/config/key-store.ts`) for any user-facing display of a secret.
 
+  **Exception (by design):** The `ask_chatgpt` tool logs **full question + context text on tool invocation, and full answer text on success** to the daily log file (`logs/YYYY-MM-DD.log`) via `src/logger.ts`. This is an explicit, user-approved decision to maintain a complete audit trail of what was asked and what was answered, supporting future compliance/review. This does **not** contradict the no-secrets rule — API keys, tokens, and webhook URLs remain completely excluded from all logging (they are never visible in the log file or web dashboard). The full-text logging applies only to call context and answers, not credentials.
+
 ## Auto-routing Logic
 
 For OpenRouter support, detect key format and auto-set endpoint (`src/providers/openai-provider.ts`):
@@ -126,7 +128,7 @@ Use `Promise.allSettled()` to handle multiple side-effects:
 ```typescript
 const results = await Promise.allSettled([notifyTelegram(text), notifySlack(text)]);
 for (const r of results) {
-  if (r.status === "rejected") console.error("Notify error:", r.reason);
+  if (r.status === "rejected") logError("mcp", "Notify error", r.reason);
 }
 ```
 

@@ -22,6 +22,7 @@ import { deleteSetting, getSetting, migrateAppSettings, setSetting } from "../co
 import { summarize } from "../usage/usage-aggregator.js";
 import { DEFAULT_MODEL as OPENAI_DEFAULT_MODEL, resolveOpenAIBaseURL } from "../providers/openai-provider.js";
 import { DEFAULT_MODEL as GEMINI_DEFAULT_MODEL } from "../providers/gemini-provider.js";
+import { logInfo, logError, getTodayLogPath } from "../logger.js";
 
 // Idempotent — safe to run here even if the MCP stdio process already ran these at its
 // own startup (INSERT OR IGNORE, see key-store.ts / app-settings.ts).
@@ -42,6 +43,15 @@ const dashboardHtml = fs.readFileSync(path.join(REPO_ROOT, "src", "web", "dashbo
 
 const app = express();
 app.use(express.json());
+
+// Activity log — one line per request, logged with the ACTUAL response status
+// (via 'finish', not before next()), so a handler-set status is captured correctly.
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    logInfo("web", `${req.method} ${req.originalUrl} ${res.statusCode}`);
+  });
+  next();
+});
 
 // [Red Team fix — no CSRF/Origin defense] "Localhost-only, no auth" defends against remote
 // network attackers, not a malicious page in another browser tab silently POSTing to this
@@ -222,7 +232,7 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/api/state", (_req, res) => {
-  const activeProvider = getActiveProvider();
+  const activeProvider = getActiveProvider("web");
   const usage = summarize();
   res.json({
     activeProvider,
@@ -424,6 +434,12 @@ app.get("/api/keys/:id/fetch-models", requireSameOriginStrict, async (req, res) 
   }
 });
 
+app.get("/api/logs/today", (_req, res) => {
+  const logPath = getTodayLogPath();
+  const content = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+  res.type("text/plain").send(content);
+});
+
 app.get("/api/settings", (_req, res) => {
   const telegramBotToken = getSetting("telegramBotToken");
   const slackWebhookUrl = getSetting("slackWebhookUrl");
@@ -469,10 +485,10 @@ app.patch("/api/settings", requireSameOrigin, (req, res) => {
 // Never leak the stack trace or internal file paths to the HTTP client — log full detail
 // server-side, return a generic message (see security-rules: no stack traces in API responses).
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error("Unhandled web server error:", err);
+  logError("web", "Unhandled web server error", err);
   res.status(400).json({ error: "Invalid request" });
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`mcp-chatgpt-bridge web config server listening on http://${HOST}:${PORT}`);
+  logInfo("web", `mcp-chatgpt-bridge web config server listening on http://${HOST}:${PORT}`);
 });

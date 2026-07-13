@@ -3,6 +3,7 @@
 // failure is logged, never thrown — notification is informational only and must not affect the tool's
 // primary answer to Claude.
 import { getSetting } from "./config/app-settings.js";
+import { logError } from "./logger.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 3500; // Telegram hard caps messages at 4096 chars
 const SLACK_MESSAGE_LIMIT = 8000;
@@ -22,7 +23,7 @@ async function notifyTelegram(text: string): Promise<void> {
     body: JSON.stringify({ chat_id: chatId, text: truncate(text, TELEGRAM_MESSAGE_LIMIT) }),
   });
   if (!res.ok) {
-    console.error(`Telegram notify failed (${res.status}): ${await res.text()}`);
+    logError("mcp", `Telegram notify failed (${res.status}): ${await res.text()}`);
   }
 }
 
@@ -36,13 +37,13 @@ async function notifySlack(text: string): Promise<void> {
     body: JSON.stringify({ text: truncate(text, SLACK_MESSAGE_LIMIT) }),
   });
   if (!res.ok) {
-    console.error(`Slack notify failed (${res.status}): ${await res.text()}`);
+    logError("mcp", `Slack notify failed (${res.status}): ${await res.text()}`);
   }
 }
 
 export async function notifyChannels(text: string): Promise<void> {
   const results = await Promise.allSettled([notifyTelegram(text), notifySlack(text)]);
   for (const r of results) {
-    if (r.status === "rejected") console.error("Notify error:", r.reason);
+    if (r.status === "rejected") logError("mcp", "Notify error", r.reason);
   }
 }

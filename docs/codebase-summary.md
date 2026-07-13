@@ -205,6 +205,29 @@ interface AskUsage {
 - XSS-safe: all user text rendered via `textContent`, never `innerHTML`.
 - No external dependencies (pure HTML/CSS/JS).
 
+## Activity Logging Layer
+
+### `src/logger.ts` (~34 LOC)
+
+**Structured file-based activity logging to local disk.**
+
+**Key responsibilities:**
+- Write plain-text, single-line log entries to daily log files (`logs/YYYY-MM-DD.log`, one file per calendar day, local timezone).
+- Line format: `[ISO-timestamp] [component] [level] message`, newline-escaped.
+- Used by both MCP server (`src/index.ts`) and web server (`src/web/server.ts`).
+- Fail-open: never throws; errors (disk full, permission denied) are silently swallowed — logging must never block the primary flow.
+
+**Key functions:**
+- `logInfo(component: "mcp"|"web", message: string)` — Write an INFO-level entry.
+- `logError(component: "mcp"|"web", message: string, err?: unknown)` — Write an ERROR-level entry, optionally appending error detail.
+- `getTodayLogPath(): string` — Return the full path to today's log file (used by web server's `GET /api/logs/today` route).
+
+**Design notes:**
+- No log rotation or retention — files accumulate indefinitely (same posture as unbounded `usage_events` table).
+- Logs full call context: `ask_chatgpt` tool logs the complete question + context text on call, and the complete answer text on success (explicit design decision for complete audit trail, approved by user).
+- Web server middleware logs every HTTP request: method, path, response status.
+- All `console.*` calls removed from source code — `logger.ts` is the sole output path for structured logging.
+
 ## Notification Layer
 
 ### `src/notify.ts` (~48 LOC)

@@ -8,6 +8,7 @@ import { migrateAppSettings } from "./config/app-settings.js";
 import { openaiProvider, DEFAULT_MODEL as OPENAI_DEFAULT_MODEL } from "./providers/openai-provider.js";
 import { geminiProvider, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL } from "./providers/gemini-provider.js";
 import { appendUsageEvent } from "./usage/usage-logger.js";
+import { logInfo, logError } from "./logger.js";
 
 // Keep prompt + answer within a sane token budget so a single call can't blow up cost/latency.
 const MAX_INPUT_CHARS = 60_000;
@@ -74,7 +75,8 @@ server.registerTool(
     },
   },
   async ({ question, context, model }) => {
-    const provider = keyStore.getActiveProvider(); // reads fresh from disk, no held snapshot
+    logInfo("mcp", `ask_chatgpt called | question=${question} | context=${context}`);
+    const provider = keyStore.getActiveProvider("mcp"); // reads fresh from disk, no held snapshot
     const picked = keyStore.pickKeyForCall(provider);
     if (!picked) {
       return {
@@ -129,6 +131,8 @@ server.registerTool(
         ok: true,
       });
 
+      logInfo("mcp", `ask_chatgpt succeeded | provider=${provider} model=${modelToUse} | answer=${answer}`);
+
       // Best-effort — delivery failures are logged inside notifyChannels, never surfaced here.
       await notifyChannels(`🤖 ${provider} tư vấn\n\n${answer}`);
       return { content: [{ type: "text" as const, text: answer }] };
@@ -167,6 +171,8 @@ server.registerTool(
         errorKind,
       });
 
+      logError("mcp", `ask_chatgpt failed | provider=${provider} errorKind=${errorKind}`, err);
+
       return { content: [{ type: "text" as const, text: `ask_chatgpt failed: ${hint}` }], isError: true };
     }
   }
@@ -180,6 +186,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Fatal error starting mcp-chatgpt-bridge:", err);
+  logError("mcp", "Fatal error starting mcp-chatgpt-bridge", err);
   process.exit(1);
 });
