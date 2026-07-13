@@ -13,10 +13,17 @@ function logPathForToday(): string {
 
 function writeLine(component: "mcp" | "web", level: "INFO" | "ERROR", message: string): void {
   try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
+    // Owner-only permissions — log lines can contain full ask_chatgpt question/context/answer
+    // text (an explicit user decision), so the directory and file should not be world-readable.
+    fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
     const safeMessage = message.replace(/\r?\n/g, "\\n");
     const line = `[${new Date().toISOString()}] [${component}] [${level}] ${safeMessage}\n`;
-    fs.appendFileSync(logPathForToday(), line);
+    const fd = fs.openSync(logPathForToday(), "a", 0o600);
+    try {
+      fs.writeSync(fd, line);
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     // Fail-open — logging must never throw into the caller (matches notify.ts precedent).
     // No console fallback: this logger IS the replacement for console output.
