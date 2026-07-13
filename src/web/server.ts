@@ -491,4 +491,5 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 app.listen(PORT, HOST, () => {
   logInfo("web", `mcp-chatgpt-bridge web config server listening on http://${HOST}:${PORT}`);
+  console.log(`mcp-chatgpt-bridge web config server listening on http://${HOST}:${PORT}`)
 });
