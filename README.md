@@ -1,6 +1,22 @@
 # mcp-chatgpt-bridge
 
+[![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![MCP compatible](https://img.shields.io/badge/MCP-compatible-000000)](https://modelcontextprotocol.io)
+![Status: demo/personal-use](https://img.shields.io/badge/status-demo%2Fpersonal--use-yellow)
+![License: none](https://img.shields.io/badge/license-none-lightgrey)
+
 MCP server that lets Claude Code consult an AI advisor (OpenAI or Gemini, configurable via web dashboard) for a second opinion mid-task, with explicit context passed by the caller.
+
+## Contents
+
+- [What it does](#what-it-does)
+- [Features](#features)
+- [Quickstart](#quickstart)
+- [The `ask_chatgpt` tool](#the-ask_chatgpt-tool)
+- [Architecture](#architecture)
+- [Project Status](#project-status)
+- [Documentation](#documentation)
+- [License](#license)
 
 ## What it does
 
@@ -8,7 +24,13 @@ When Claude Code is stuck on a design decision, needs a cross-check, or wants an
 
 Every consultation is automatically pushed to Telegram/Slack (if configured) so you can review the advice independently later.
 
-All configuration (API keys, active provider, web port, notify secrets) lives in a local SQLite database, managed via `npm run web` — no `.env` file needed.
+## Features
+
+- **Dual-provider** — OpenAI or Gemini, switchable via the web dashboard.
+- **Key rotation (LRU + cooldown)** — spreads load across multiple keys, skips ones currently rate-limited (429).
+- **Full audit log** — every question/context/answer plus all HTTP requests logged daily to `logs/YYYY-MM-DD.log`, viewable in the dashboard.
+- **Best-effort notify** — pushes each consultation to Telegram/Slack in parallel; delivery failures never block the tool result.
+- **No `.env` needed** — all config (API keys, active provider, notify secrets) lives in a local SQLite database, managed via `npm run web`.
 
 ## Quickstart
 
@@ -40,31 +62,26 @@ Model precedence: if the API key picked for this call has its own model configur
 
 ## Architecture
 
-Claude Code calls the `ask_chatgpt` MCP tool via stdio. The server:
-1. Looks up the active provider (OpenAI or Gemini) from the SQLite config database.
-2. Picks an enabled API key for that provider (rotating among keys, respecting cooldown periods on rate-limited keys).
-3. Dispatches the call to the selected provider's implementation.
-4. Logs the call outcome to the usage_events table (structured SQL log).
-5. Writes full activity to the daily plain-text log file (`logs/YYYY-MM-DD.log`) — logs full question/context/answer text and all HTTP requests.
-6. Pushes the answer to Telegram/Slack (if configured, as a best-effort side-channel).
-7. Returns the answer to Claude Code.
+Claude Code calls `ask_chatgpt` over stdio; the server picks an active provider/key from SQLite, dispatches the call, logs the outcome, and (best-effort, in parallel) notifies Telegram/Slack.
 
-All API keys, settings (web port, notify secrets), and usage records live in a local SQLite database. Configuration is done via the web dashboard (`npm run web`) — no env vars or dotenv files.
+```mermaid
+flowchart LR
+    A[Claude Code] -->|stdio: ask_chatgpt| B[mcp-chatgpt-bridge]
+    B --> C{Active provider}
+    C -->|OpenAI/OpenRouter| D[openai-provider]
+    C -->|Gemini| E[gemini-provider]
+    B --> F[(SQLite: config + usage log)]
+    B -.->|best-effort| G[Telegram / Slack]
+```
 
-**Activity Log:** Open the web dashboard, navigate to the "Activity log (today)" section, and click the "Sync" button to view today's full activity log. Each line shows the timestamp, component (mcp/web), level (INFO/ERROR), and message.
-
-Two Claude Code hooks push Claude to auto-consult: one hard-denies the `AskUserQuestion` tool call until `ask_chatgpt` has been called (the effective enforcement point), the other nags on plain-text questions ending in `?` (best-effort — no tool call to hard-block there). Both give up after 2 tries per session to avoid infinite loops, so this is a strong nudge, not a 100% guarantee.
-
-The hook scripts live in [`hooks/`](./hooks) and are global in scope (they affect every Claude Code project on the machine, not just this repo) — `npm run install-hooks` copies them into `~/.claude/hooks` and registers them in `~/.claude/settings.json`, merging idempotently so it's safe to re-run. `hooks/lib/ck-config-utils.cjs` is a vendored snapshot of shared infra owned by a broader personal hook framework; the installer only writes it if that file doesn't already exist, so it never clobbers the live copy other unrelated hooks depend on.
-
-See [System Architecture](./docs/system-architecture.md) for a detailed diagram.
+Two global Claude Code hooks push auto-consult behavior (one hard-blocks `AskUserQuestion` until `ask_chatgpt` has run, capped at 2 tries/session so it can't loop forever) — see [System Architecture § Global Hook Enforcement](./docs/system-architecture.md#global-hook-enforcement) for the full mechanism, error handling, and design rationale.
 
 ## Project Status
 
 - **Maturity:** Demo / personal use (0.1.0)
 - **Test suite:** None yet
 - **CI/CD:** None yet
-- **Known gaps:** 
+- **Known gaps:**
   - Gemini path not yet live-tested (no API key available at time of refactor completion)
   - No dashboard authentication (bare SQLite CRUD, suitable only for local single-user use)
   - usage_events table unbounded growth (no retention policy yet)
@@ -82,4 +99,4 @@ See [Project Roadmap](./docs/project-roadmap.md) for details.
 
 ## License
 
-See LICENSE file if present.
+No `LICENSE` file yet — all rights reserved by default until one is added.
