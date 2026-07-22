@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="vi" data-lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mcp-chatgpt-bridge — second opinion cho Claude Code</title>
+<meta name="description" content="MCP server nhẹ kết nối Claude Code với AI advisor (OpenAI/Gemini) để tham vấn tức thời, có ngữ cảnh rõ ràng, có log, có audit.">
+
+<!-- Fonts: Be Vietnam Pro (Vietnamese-first body/display) + JetBrains Mono (terminal accents). Graceful system fallback if offline. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<script>
+/* ---- THEME BOOTSTRAP (runs before paint to avoid flash) ---- */
+(function () {
+  var root = document.documentElement;
+  var mode = localStorage.getItem('showoff-theme') || 'system';
+  var lang = localStorage.getItem('showoff-lang') || 'vi';
+  function resolve(m) {
+    if (m === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return m;
+  }
+  root.setAttribute('data-theme-pref', mode);
+  root.setAttribute('data-theme', resolve(mode));
+  root.setAttribute('data-lang', lang);
+  window.__resolveTheme = resolve;
+})();
+</script>
+
+<style>
+/* ============================================================
+   1. DESIGN TOKENS
+   ============================================================ */
+:root {
+  --font-display: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-body: 'Be Vietnam Pro', -apple-system, 'Segoe UI', Roboto, 'Noto Sans', Arial, sans-serif;
+
+  --amber: #ffb238;
+  --amber-strong: #ff9d0a;
+  --phosphor: #6fffb0;
+
+  --section-pad-y: clamp(20px, 4vh, 56px);
+  --section-pad-x: clamp(20px, 5vw, 88px);
+  --gap-lg: clamp(16px, 3vh, 40px);
+  --radius: 14px;
+}
+
+html[data-theme="dark"] {
+  --ink: #0a0c0b;
+  --ink-raised: #121512;
+  --ink-raised-2: #181c18;
+  --wire: rgba(255,255,255,0.10);
+  --wire-soft: rgba(255,255,255,0.05);
+  --text: #ece8dd;
+  --text-dim: #93968d;
+  --text-faint: #62655e;
+  --accent: var(--amber);
+  --accent-strong: var(--amber-strong);
+  --accent-ink: #241a06;
+  --shadow: 0 20px 60px rgba(0,0,0,0.45);
+  --grain-opacity: 0.05;
+}
+
+html[data-theme="light"] {
+  --ink: #f3efe4;
+  --ink-raised: #ffffff;
+  --ink-raised-2: #ece6d6;
+  --wire: rgba(20,18,10,0.12);
+  --wire-soft: rgba(20,18,10,0.06);
+  --text: #1a1a16;
+  --text-dim: #5c5b52;
+  --text-faint: #8b8a7f;
+  --accent: #b3630a;
+  --accent-strong: #944f06;
+  --accent-ink: #fff1dc;
+  --shadow: 0 20px 50px rgba(30,20,0,0.12);
+  --grain-opacity: 0.03;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+a { color: inherit; }
+
+/* Subtle CRT dot-grid + scanline atmosphere */
+body::before {
+  content: "";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: radial-gradient(var(--wire-soft) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.6;
+}
+html[data-theme="dark"] body::after {
+  content: "";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.10) 0px, rgba(0,0,0,0.10) 1px, transparent 1px, transparent 3px);
+  opacity: var(--grain-opacity);
+}
+
+/* ============================================================
+   2. LANGUAGE TOGGLE (pure CSS swap, no re-render)
+   ============================================================ */
+html[data-lang="en"] [data-vi] { display: none !important; }
+html[data-lang="vi"] [data-en] { display: none !important; }
+
+/* ============================================================
+   3. FIXED CONTROLS BAR
+   ============================================================ */
+.controls {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px clamp(16px, 4vw, 40px);
+  background: linear-gradient(to bottom, var(--ink) 60%, transparent);
+}
+.brand {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+.status-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--phosphor);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--phosphor) 20%, transparent);
+  animation: pulse 2.4s ease-in-out infinite;
+  flex: none;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.control-buttons { display: flex; gap: 8px; }
+.pill-btn {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: var(--ink-raised);
+  border: 1px solid var(--wire);
+  border-radius: 999px;
+  padding: 7px 14px;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  transition: border-color 0.2s ease, transform 0.15s ease;
+}
+.pill-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+.pill-btn:active { transform: translateY(0); }
+.pill-btn svg { width: 13px; height: 13px; }
+
+/* ============================================================
+   4. SECTION SHELL
+   ============================================================ */
+section {
+  position: relative;
+  z-index: 1;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: calc(var(--section-pad-y) + 46px) var(--section-pad-x) var(--section-pad-y);
+}
+.section-inner { width: 100%; max-width: 1180px; margin: 0 auto; }
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: clamp(11px, 1.3vh, 13px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: clamp(10px, 2vh, 18px);
+}
+.eyebrow::before {
+  content: "";
+  width: 22px; height: 1px;
+  background: var(--accent);
+}
+h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(24px, 5.2vh, 44px);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  margin: 0 0 clamp(12px, 2.4vh, 22px) 0;
+}
+p { margin: 0 0 1em 0; color: var(--text-dim); }
+p:last-child { margin-bottom: 0; }
+.lede {
+  font-size: clamp(15px, 2vh, 19px);
+  max-width: 62ch;
+}
+
+/* Scroll reveal */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity 0.7s cubic-bezier(.2,.7,.3,1), transform 0.7s cubic-bezier(.2,.7,.3,1);
+}
+[data-reveal].is-visible { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] { transition: none !important; opacity: 1 !important; transform: none !important; }
+}
+
+/* ============================================================
+   5. HERO
+   ============================================================ */
+#hero { justify-content: center; }
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: clamp(24px, 5vw, 64px);
+  align-items: center;
+}
+@media (max-width: 860px), (orientation: portrait) {
+  .hero-grid { grid-template-columns: 1fr; }
+}
+.hero-kicker {
+  font-family: var(--font-display);
+  font-size: clamp(11px, 1.4vh, 13px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: clamp(14px, 2.4vh, 24px);
+  display: flex; align-items: center; gap: 10px;
+}
+.hero-kicker .status-dot { width: 6px; height: 6px; }
+.hero-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(34px, 7.5vh, 76px);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin: 0 0 clamp(14px, 2.4vh, 26px) 0;
+}
+.hero-title .cursor {
+  display: inline-block;
+  width: 0.5em; height: 0.85em;
+  background: var(--accent);
+  margin-left: 4px;
+  animation: blink 1.1s step-end infinite;
+  vertical-align: -0.1em;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.hero-tagline {
+  font-size: clamp(15px, 2.2vh, 21px);
+  color: var(--text-dim);
+  max-width: 46ch;
+  margin: 0 0 clamp(18px, 3vh, 30px) 0;
+}
+.hero-tagline strong { color: var(--text); font-weight: 600; }
+.hero-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: 1px solid var(--wire);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.btn-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.btn-ghost { background: transparent; color: var(--text); }
+
+/* Hero terminal card */
+.term-card {
+  background: var(--ink-raised);
+  border: 1px solid var(--wire);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.term-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--wire);
+}
+.term-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--wire); }
+.term-bar span.term-label {
+  font-family: var(--font-display);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-left: 6px;
+}
+.term-body {
+  padding: 18px 16px 20px;
+  font-family: var(--font-display);
+  font-size: clamp(11.5px, 1.5vh, 13.5px);
+  line-height: 1.7;
+}
+.term-body .prompt { color: var(--text-faint); }
+.term-body .cmd { color: var(--text); }
+.term-body .str { color: var(--accent); }
+.term-body .out { color: var(--phosphor); }
+.term-body .comment { color: var(--text-faint); }
+
+/* Two-node consult motif (hero decorative echo of architecture diagram) */
+.consult-nodes {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--wire);
+}
+.consult-node {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.consult-node .node-badge {
+  width: 34px; height: 34px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--ink-raised-2);
+  border: 1px solid var(--wire);
+  font-size: 13px; color: var(--text);
+}
+.consult-line {
+  flex: 1; height: 1px; margin: 0 10px;
+  background: repeating-linear-gradient(to right, var(--accent) 0 6px, transparent 6px 11px);
+  position: relative; top: -12px;
+}
+
+/* ============================================================
+   6. ARCHITECTURE — vertical pipeline diagram
+   ============================================================ */
+.pipeline {
+  position: relative;
+  padding-left: clamp(20px, 3vw, 32px);
+}
+.pipeline::before {
+  content: "";
+  position: absolute;
+  left: 5px; top: 6px; bottom: 6px;
+  width: 1px;
+  background: var(--wire);
+}
+.pipe-node { position: relative; padding-bottom: clamp(14px, 2.6vh, 26px); }
+.pipe-node:last-child { padding-bottom: 0; }
+.pipe-node::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * clamp(20px, 3vw, 32px) + 1px);
+  top: 4px;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 2px solid var(--accent);
+}
+.pipe-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(13.5px, 1.9vh, 17px);
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.pipe-detail {
+  font-size: clamp(12px, 1.5vh, 14.5px);
+  color: var(--text-dim);
+  max-width: 60ch;
+}
+.pipe-branch {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  margin-top: 8px;
+}
+.pipe-chip {
+  font-family: var(--font-display);
+  font-size: clamp(11px, 1.3vh, 12.5px);
+  color: var(--text);
+  background: var(--ink-raised);
+  border: 1px solid var(--wire);
+  border-radius: 8px;
+  padding: 6px 11px;
+}
+.pipe-chip.dashed { border-style: dashed; color: var(--text-dim); }
+
+/* ============================================================
+   7. FEATURES — audit-log style list
+   ============================================================ */
+.log-list { display: flex; flex-direction: column; }
+.log-row {
+  display: grid;
+  grid-template-columns: clamp(22px, 3vw, 34px) 1fr;
+  gap: clamp(10px, 2vw, 18px);
+  padding: clamp(12px, 2vh, 18px) 0;
+  border-top: 1px solid var(--wire-soft);
+}
+.log-row:first-child { border-top: 1px solid var(--wire); }
+.log-idx {
+  font-family: var(--font-display);
+  font-size: clamp(11px, 1.4vh, 13px);
+  color: var(--accent);
+  padding-top: 2px;
+}
+.log-title {
+  font-weight: 600;
+  font-size: clamp(14px, 1.8vh, 16.5px);
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.log-desc {
+  font-size: clamp(12.5px, 1.6vh, 14.5px);
+  color: var(--text-dim);
+  max-width: 68ch;
+}
+.log-desc code {
+  font-family: var(--font-display);
+  background: var(--ink-raised-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.92em;
+}
+
+/* ============================================================
+   8. SECURITY — patch/diff annotated callouts
+   ============================================================ */
+.patch-list { display: flex; flex-direction: column; gap: clamp(10px, 1.8vh, 14px); }
+.patch-item {
+  display: flex; gap: 12px;
+  padding: clamp(12px, 1.8vh, 16px);
+  background: var(--ink-raised);
+  border: 1px solid var(--wire);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+}
+.patch-mark {
+  font-family: var(--font-display);
+  color: var(--phosphor);
+  font-weight: 700;
+  flex: none;
+}
+.patch-text { font-size: clamp(12.5px, 1.6vh, 14.5px); color: var(--text-dim); }
+.patch-text strong { color: var(--text); }
+.redteam-callout {
+  margin-top: clamp(12px, 2vh, 18px);
+  padding: clamp(12px, 1.8vh, 16px);
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  font-family: var(--font-display);
+  font-size: clamp(11.5px, 1.4vh, 13px);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* ============================================================
+   9. QUICKSTART — terminal
+   ============================================================ */
+.quickstart-grid { display: flex; flex-direction: column; gap: clamp(12px, 2vh, 18px); }
+.term-copy-btn {
+  position: absolute; top: 8px; right: 10px;
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  background: var(--ink-raised-2);
+  border: 1px solid var(--wire);
+  border-radius: 6px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.term-copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.term-wrap { position: relative; }
+.term-body .line { display: block; }
+.hint {
+  font-size: clamp(12px, 1.5vh, 14px);
+  color: var(--text-faint);
+}
+
+/* ============================================================
+   10. FOOTER / CITATIONS
+   ============================================================ */
+footer {
+  position: relative; z-index: 1;
+  padding: clamp(28px, 5vh, 48px) var(--section-pad-x);
+  border-top: 1px solid var(--wire);
+}
+.footer-inner {
+  max-width: 1180px; margin: 0 auto;
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 18px;
+}
+.footer-refs {
+  font-family: var(--font-display);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.footer-refs a { color: var(--text-faint); text-decoration: none; border-bottom: 1px dotted var(--wire); }
+.footer-refs a:hover { color: var(--accent); border-color: var(--accent); }
+.footer-sig {
+  font-family: var(--font-display);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  align-self: flex-end;
+}
+
+/* Parallax decorative layer */
+.decor {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+.decor-node {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 70%);
+  will-change: transform;
+}
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <div class="brand">
+    <span class="status-dot"></span>
+    mcp-chatgpt-bridge
+  </div>
+  <div class="control-buttons">
+    <button class="pill-btn" id="lang-toggle" type="button" aria-label="Toggle language">
+      <span data-vi>VI → EN</span><span data-en>EN → VI</span>
+    </button>
+    <button class="pill-btn" id="theme-toggle" type="button" aria-label="Toggle theme">
+      <span id="theme-label">system</span>
+    </button>
+  </div>
+</div>
+
+<!-- ============================================================
+     HERO
+     ============================================================ -->
+<section id="hero">
+  <div class="decor"><div class="decor-node" data-parallax="0.04" style="width:420px;height:420px;top:-10%;right:-6%;"></div></div>
+  <div class="section-inner hero-grid">
+    <div data-reveal>
+      <div class="hero-kicker"><span class="status-dot"></span> MCP SERVER · STDIO TRANSPORT</div>
+      <h1 class="hero-title">
+        mcp-chatgpt-bridge<span class="cursor"></span>
+      </h1>
+      <p class="hero-tagline">
+        <span data-vi>Cho <strong>Claude Code</strong> một "ý kiến thứ hai" — ngay giữa tác vụ, không rời terminal.</span>
+        <span data-en>Give <strong>Claude Code</strong> a second opinion — mid-task, without leaving the terminal.</span>
+      </p>
+      <p class="hero-tagline" style="margin-top:-14px;">
+        <span data-vi>Server MCP nhẹ, kết nối Claude Code với AI advisor (OpenAI hoặc Gemini) để tham vấn tức thời — có ngữ cảnh rõ ràng, có log, có audit.</span>
+        <span data-en>A lightweight MCP server that bridges Claude Code to an AI advisor (OpenAI or Gemini) for instant consultation — explicit context, logged, auditable.</span>
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#architecture">
+          <span data-vi>Xem kiến trúc</span><span data-en>See architecture</span>
+        </a>
+        <a class="btn btn-ghost" href="#quickstart">
+          <span data-vi>Cài đặt nhanh</span><span data-en>Quickstart</span>
+        </a>
+      </div>
+    </div>
+
+    <div data-reveal style="transition-delay:0.12s;">
+      <div class="term-card">
+        <div class="term-bar">
+          <span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span>
+          <span class="term-label">claude-code — ask_chatgpt</span>
+        </div>
+        <div class="term-body">
+          <span class="line"><span class="prompt">❯</span> <span class="cmd" id="typed-cmd"></span></span>
+          <span class="line comment" id="typed-out" style="opacity:0;"></span>
+        </div>
+        <div class="consult-nodes" style="padding: 0 16px 16px;">
+          <div class="consult-node"><div class="node-badge">CC</div>Claude Code</div>
+          <div class="consult-line"></div>
+          <div class="consult-node"><div class="node-badge">AI</div><span data-vi>Advisor</span><span data-en>Advisor</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     PROBLEM
+     ============================================================ -->
+<section id="problem">
+  <div class="section-inner" data-reveal>
+    <div class="eyebrow" data-vi>Vấn đề &amp; giải pháp</div>
+    <div class="eyebrow" data-en>Problem &amp; solution</div>
+    <h2><span data-vi>Hỏi thêm một AI — nhanh hơn hỏi người, nếu làm đúng cách</span><span data-en>Asking another AI — faster than asking a human, if done right</span></h2>
+    <p class="lede">
+      <span data-vi>Khi Claude Code gặp điểm quyết định quan trọng — pattern A hay B? cách xử lý lỗi này đúng không? — việc tham vấn AI khác chỉ có giá trị khi ba điều kiện được đảm bảo:</span>
+      <span data-en>When Claude Code hits a real decision point — pattern A or B? is this error handling correct? — consulting another AI only helps if three conditions hold:</span>
+    </p>
+    <div class="log-list" style="margin-top: 14px;">
+      <div class="log-row">
+        <div class="log-idx">01</div>
+        <div>
+          <div class="log-title"><span data-vi>Ngữ cảnh rõ ràng</span><span data-en>Explicit context</span></div>
+          <div class="log-desc"><span data-vi>AI tư vấn thấy đúng thứ cần thiết — không phải toàn bộ repo hay lịch sử chat.</span><span data-en>The advisor sees exactly the right context — not the whole repo or chat history.</span></div>
+        </div>
+      </div>
+      <div class="log-row">
+        <div class="log-idx">02</div>
+        <div>
+          <div class="log-title"><span data-vi>Có bản ghi lại</span><span data-en>Kept a record</span></div>
+          <div class="log-desc"><span data-vi>Con người vẫn xem lại được đã hỏi gì, được khuyên gì — qua Telegram/Slack hoặc dashboard.</span><span data-en>The human keeps a full record of what was asked and recommended — via Telegram/Slack or the dashboard.</span></div>
+        </div>
+      </div>
+      <div class="log-row">
+        <div class="log-idx">03</div>
+        <div>
+          <div class="log-title"><span data-vi>Không gián đoạn luồng chính</span><span data-en>Never blocks the workflow</span></div>
+          <div class="log-desc"><span data-vi>Một tool MCP duy nhất — <code>ask_chatgpt(question, context, model?)</code> — gọi trực tiếp từ giữa tác vụ.</span><span data-en>One focused MCP tool — <code>ask_chatgpt(question, context, model?)</code> — called directly mid-task.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     ARCHITECTURE
+     ============================================================ -->
+<section id="architecture">
+  <div class="section-inner" data-reveal>
+    <div class="eyebrow" data-vi>Kiến trúc</div>
+    <div class="eyebrow" data-en>Architecture</div>
+    <h2><span data-vi>Một lệnh gọi, năm chặng</span><span data-en>One call, five hops</span></h2>
+    <p class="lede" style="margin-bottom: clamp(16px,2.6vh,26px);">
+      <span data-vi>Xây trên chuẩn mở <strong>Model Context Protocol</strong> của Anthropic<sup>[1]</sup> — AI client kết nối chuẩn hoá tới data/tool server, không cần tích hợp riêng lẻ.</span>
+      <span data-en>Built on Anthropic's open <strong>Model Context Protocol</strong> standard<sup>[1]</sup> — AI clients connect to data/tool servers through one standardized interface, no custom integrations.</span>
+    </p>
+
+    <div class="pipeline">
+      <div class="pipe-node">
+        <div class="pipe-label">Claude Code (MCP Client)</div>
+        <div class="pipe-detail"><span data-vi>Gọi tool <code style="font-family:var(--font-display);">ask_chatgpt(question, context, model?)</code> qua stdio.</span><span data-en>Calls the <code style="font-family:var(--font-display);">ask_chatgpt(question, context, model?)</code> tool over stdio.</span></div>
+      </div>
+      <div class="pipe-node">
+        <div class="pipe-label">mcp-chatgpt-bridge (MCP Server)</div>
+        <div class="pipe-detail"><span data-vi>Tra active provider trong SQLite · chọn key theo LRU, bỏ qua key đang cooldown.</span><span data-en>Looks up active provider in SQLite · picks a key via LRU, skipping keys in cooldown.</span></div>
+      </div>
+      <div class="pipe-node">
+        <div class="pipe-label"><span data-vi>Provider dispatch</span><span data-en>Provider dispatch</span></div>
+        <div class="pipe-branch">
+          <span class="pipe-chip">OpenAI / OpenRouter</span>
+          <span class="pipe-chip">Gemini</span>
+        </div>
+      </div>
+      <div class="pipe-node">
+        <div class="pipe-label">SQLite</div>
+        <div class="pipe-detail"><span data-vi>Ghi config + <code style="font-family:var(--font-display);">usage_events</code> (token, key, kết quả) — đọc/ghi mỗi lần gọi.</span><span data-en>Writes config + <code style="font-family:var(--font-display);">usage_events</code> (tokens, key, outcome) — read/written every call.</span></div>
+        <div class="pipe-branch">
+          <span class="pipe-chip dashed"><span data-vi>song song, best-effort</span><span data-en>parallel, best-effort</span> → Telegram / Slack</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     FEATURES
+     ============================================================ -->
+<section id="features">
+  <div class="section-inner" data-reveal>
+    <div class="eyebrow" data-vi>Tính năng chính</div>
+    <div class="eyebrow" data-en>Key features</div>
+    <h2><span data-vi>Đọc như một audit log</span><span data-en>Reads like its own audit log</span></h2>
+    <div class="log-list">
+      <div class="log-row">
+        <div class="log-idx">01</div>
+        <div>
+          <div class="log-title">Dual-provider</div>
+          <div class="log-desc"><span data-vi>OpenAI và Gemini, chọn qua dashboard, tự động route sang OpenRouter theo prefix key.</span><span data-en>OpenAI and Gemini, switchable via dashboard, auto-routes to OpenRouter by key prefix.</span></div>
+        </div>
+      </div>
+      <div class="log-row">
+        <div class="log-idx">02</div>
+        <div>
+          <div class="log-title">LRU key rotation + cooldown</div>
+          <div class="log-desc"><span data-vi>Rải tải nhiều key, tự tránh key đang bị rate-limit (429 → cooldown 60s).</span><span data-en>Spreads load across keys, automatically avoids rate-limited keys (429 → 60s cooldown).</span></div>
+        </div>
+      </div>
+      <div class="log-row">
+        <div class="log-idx">03</div>
+        <div>
+          <div class="log-title"><span data-vi>Truncation guard</span><span data-en>Truncation guards</span></div>
+          <div class="log-desc"><span data-vi>Giới hạn input <code>60K</code> ký tự / output <code>20K</code> ký tự — chặn chi phí token bất ngờ.</span><span data-en><code>60K</code>-char input / <code>20K</code>-char output caps — prevents surprise token cost spikes.</span></div>
+        </div>
+      </div>
+      <div class="log-row">
+        <div class="log-idx">04</div>
+        <div>
+          <div class="log-title"><span data-vi>Audit log đầy đủ</span><span data-en>Full audit log</span></div>
+          <div class="log-desc"><span data-vi>File log hàng ngày <code>logs/YYYY-MM-DD.log</code> ghi toàn bộ câu hỏi/ngữ cảnh/câu trả lời + mọi HTTP request, xem qua dashboard.</span><span data-en>Daily log file <code>logs/YYYY-MM-DD.log</code> captures every question/context/answer plus every HTTP request, viewable in the dashboard.</span></div>
+        </div>
+      </div>
+      <div class="log-row">
+        <div class="log-idx">05</div>
+        <div>
+          <div class="log-title"><span data-vi>Thông báo best-effort</span><span data-en>Best-effort notifications</span></div>
+          <div class="log-desc"><span data-vi>Đẩy song song Telegram + Slack, lỗi gửi không chặn kết quả trả về.</span><span data-en>Parallel push to Telegram + Slack; delivery failures never block the tool result.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECURITY
+     ============================================================ -->
+<section id="security">
+  <div class="section-inner" data-reveal>
+    <div class="eyebrow" data-vi>Bảo mật theo thiết kế</div>
+    <div class="eyebrow" data-en>Security by design</div>
+    <h2><span data-vi>Chặn từ gốc, không chặn qua loa</span><span data-en>Closed at the root, not patched over</span></h2>
+    <div class="patch-list">
+      <div class="patch-item">
+        <div class="patch-mark">+</div>
+        <div class="patch-text"><span data-vi>Dashboard chỉ bind <strong>127.0.0.1</strong> — không remote/multi-user, đúng use-case cá nhân local.</span><span data-en>Dashboard binds <strong>127.0.0.1</strong> only — no remote/multi-user, matches its local single-user use case.</span></div>
+      </div>
+      <div class="patch-item">
+        <div class="patch-mark">+</div>
+        <div class="patch-text"><span data-vi>API keys lưu trong SQLite (<code style="font-family:var(--font-display);">data.sqlite</code>, quyền <code style="font-family:var(--font-display);">0o600</code>) — không bao giờ log ra plain text.</span><span data-en>API keys stored in SQLite (<code style="font-family:var(--font-display);">data.sqlite</code>, mode <code style="font-family:var(--font-display);">0o600</code>) — never logged in plain text.</span></div>
+      </div>
+      <div class="patch-item">
+        <div class="patch-mark">+</div>
+        <div class="patch-text"><span data-vi>Route <code style="font-family:var(--font-display);">fetch-models</code> có 2 lớp riêng: chặn request không <code style="font-family:var(--font-display);">Origin</code>, và pin IP đã resolve để chặn DNS-rebinding TOCTOU (loopback/link-local/<code style="font-family:var(--font-display);">169.254.169.254</code>/private/CGNAT).</span><span data-en>The <code style="font-family:var(--font-display);">fetch-models</code> route adds two extra guards: rejects requests with no <code style="font-family:var(--font-display);">Origin</code>, and pins the resolved IP to close a DNS-rebinding TOCTOU gap (loopback/link-local/<code style="font-family:var(--font-display);">169.254.169.254</code>/private/CGNAT).</span></div>
+      </div>
+    </div>
+    <div class="redteam-callout">
+      <span data-vi>⟶ Thiết kế này ra đời sau một vòng <strong>red-team review đối kháng trước khi code</strong> — bản đầu (chỉ <code>validateBaseURL</code> + same-origin lỏng) không thực sự chặn được SSRF/rò rỉ credential.</span>
+      <span data-en>⟶ This design emerged from an <strong>adversarial red-team review before implementation</strong> — the original (just <code>validateBaseURL</code> + a lenient same-origin check) didn't actually close the SSRF/credential-exfiltration risk.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     QUICKSTART
+     ============================================================ -->
+<section id="quickstart">
+  <div class="section-inner" data-reveal>
+    <div class="eyebrow" data-vi>Bắt đầu</div>
+    <div class="eyebrow" data-en>Get started</div>
+    <h2><span data-vi>Không có biến môi trường</span><span data-en>No environment variables</span></h2>
+    <p class="lede" style="margin-bottom: clamp(14px,2.2vh,22px);">
+      <span data-vi>Mọi cấu hình qua dashboard — API keys, provider đang dùng, secrets Telegram/Slack.</span>
+      <span data-en>All configuration lives in the dashboard — API keys, active provider, Telegram/Slack secrets.</span>
+    </p>
+    <div class="term-wrap">
+      <button class="term-copy-btn" id="copy-btn" type="button">
+        <span data-vi>Copy</span><span data-en>Copy</span>
+      </button>
+      <div class="term-card">
+        <div class="term-bar">
+          <span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span>
+          <span class="term-label">bash</span>
+        </div>
+        <div class="term-body" id="quickstart-code">
+          <span class="line"><span class="prompt">$</span> <span class="cmd">npm install &amp;&amp; npm run build</span></span>
+          <span class="line"><span class="prompt">$</span> <span class="cmd">npm run web</span>  <span class="comment"># http://localhost:4141</span></span>
+          <span class="line"><span class="prompt">$</span> <span class="cmd">npm run install-hooks</span>  <span class="comment">#</span> <span class="comment" data-vi>cài hook vào ~/.claude</span><span class="comment" data-en>installs hooks into ~/.claude</span></span>
+          <span class="line"><span class="prompt">$</span> <span class="cmd">claude mcp add chatgpt-bridge -s user -- node "$(pwd)/dist/index.js"</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-refs">
+      <span data-vi style="color:var(--text-dim);">Tham khảo</span><span data-en style="color:var(--text-dim);">References</span>
+      <span>[1] <a href="https://www.anthropic.com/news/model-context-protocol" target="_blank" rel="noopener">Introducing the Model Context Protocol — Anthropic</a></span>
+      <span>[2] <a href="https://github.com/modelcontextprotocol/modelcontextprotocol" target="_blank" rel="noopener">Model Context Protocol specification — GitHub</a></span>
+      <span>[3] <a href="https://cloud.google.com/discover/what-is-model-context-protocol" target="_blank" rel="noopener">What is Model Context Protocol (MCP)? — Google Cloud</a></span>
+    </div>
+    <div class="footer-sig">mcp-chatgpt-bridge · v0.1.0</div>
+  </div>
+</footer>
+
+<script>
+/* ============================================================
+   THEME TOGGLE
+   ============================================================ */
+(function () {
+  var root = document.documentElement;
+  var order = ['system', 'light', 'dark'];
+  var btn = document.getElementById('theme-toggle');
+  var label = document.getElementById('theme-label');
+  function setLabel(mode) { label.textContent = mode; }
+  setLabel(root.getAttribute('data-theme-pref') || 'system');
+  btn.addEventListener('click', function () {
+    var mode = localStorage.getItem('showoff-theme') || 'system';
+    var idx = (order.indexOf(mode) + 1) % order.length;
+    mode = order[idx];
+    localStorage.setItem('showoff-theme', mode);
+    root.setAttribute('data-theme-pref', mode);
+    var resolved = window.__resolveTheme ? window.__resolveTheme(mode) : mode;
+    root.setAttribute('data-theme', resolved === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : resolved);
+    setLabel(mode);
+  });
+})();
+
+/* ============================================================
+   LANGUAGE TOGGLE
+   ============================================================ */
+(function () {
+  var root = document.documentElement;
+  var btn = document.getElementById('lang-toggle');
+  btn.addEventListener('click', function () {
+    var lang = root.getAttribute('data-lang') === 'vi' ? 'en' : 'vi';
+    localStorage.setItem('showoff-lang', lang);
+    root.setAttribute('data-lang', lang);
+  });
+})();
+
+/* ============================================================
+   SCROLL REVEAL
+   ============================================================ */
+(function () {
+  var els = document.querySelectorAll('[data-reveal]');
+  if (!('IntersectionObserver' in window)) {
+    els.forEach(function (el) { el.classList.add('is-visible'); });
+    return;
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting) entry.target.classList.add('is-visible');
+    });
+  }, { threshold: 0.15 });
+  els.forEach(function (el) { io.observe(el); });
+})();
+
+/* ============================================================
+   PARALLAX (throttled via rAF, respects reduced-motion)
+   ============================================================ */
+(function () {
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced) return;
+  var nodes = document.querySelectorAll('[data-parallax]');
+  if (!nodes.length) return;
+  var ticking = false;
+  function update() {
+    var y = window.scrollY;
+    nodes.forEach(function (n) {
+      var speed = parseFloat(n.getAttribute('data-parallax')) || 0.05;
+      n.style.transform = 'translateY(' + (y * speed) + 'px)';
+    });
+    ticking = false;
+  }
+  window.addEventListener('scroll', function () {
+    if (!ticking) { requestAnimationFrame(update); ticking = true; }
+  }, { passive: true });
+})();
+
+/* ============================================================
+   HERO TERMINAL TYPING DEMO
+   ============================================================ */
+(function () {
+  var cmdEl = document.getElementById('typed-cmd');
+  var outEl = document.getElementById('typed-out');
+  if (!cmdEl) return;
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var lang = document.documentElement.getAttribute('data-lang');
+  var isVi = lang === 'vi';
+  var text = isVi
+    ? 'ask_chatgpt("Dùng pattern A hay B cho retry logic?")'
+    : 'ask_chatgpt("Should I use pattern A or B for retry logic?")';
+  var outText = isVi ? '↳ Khuyến nghị: pattern B — vì...' : '↳ Recommendation: pattern B — because...';
+
+  if (reduced) {
+    cmdEl.textContent = text;
+    outEl.textContent = outText;
+    outEl.style.opacity = '1';
+    return;
+  }
+  var i = 0;
+  function type() {
+    if (i <= text.length) {
+      cmdEl.textContent = text.slice(0, i);
+      i++;
+      setTimeout(type, 26);
+    } else {
+      outEl.textContent = outText;
+      outEl.style.transition = 'opacity 0.5s ease';
+      requestAnimationFrame(function () { outEl.style.opacity = '1'; });
+    }
+  }
+  setTimeout(type, 500);
+})();
+
+/* ============================================================
+   COPY QUICKSTART COMMANDS
+   ============================================================ */
+(function () {
+  var btn = document.getElementById('copy-btn');
+  if (!btn) return;
+  var commands = [
+    'npm install && npm run build',
+    'npm run web',
+    'npm run install-hooks',
+    'claude mcp add chatgpt-bridge -s user -- node "$(pwd)/dist/index.js"'
+  ].join('\n');
+  btn.addEventListener('click', function () {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(commands).then(function () {
+        var original = btn.innerHTML;
+        btn.textContent = '✓';
+        setTimeout(function () { btn.innerHTML = original; }, 1200);
+      }).catch(function () {});
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
